@@ -1,0 +1,288 @@
+\chapter{Entwicklung der Firmware}
+\label{cha:kebabos}
+
+\epigraph{Solltest du jemals ein Betriebssystem entwickeln, nenne es doch KebabOS - so wie unser KebabJS-Framework.}{Öner Caniperk}
+
+Zur Inbetriebnahme des \gls{SoC} benötigt man eine \gls{Firmware}. Die neu entwickelten Geräte erfordern Treiber, um von der Software angesteuert werden zu können. 
+Bisher war die angebotene Infrastruktur nur sehr rudimentär - in diesem Kapitel wird die Überarbeitung und Erweiterung geschildert. Ein wichtiger Aspekt ist die Fehlerkorrektur, da die Infrastruktur nur bedingt funktionstüchtig war. Die aufgetretenen Probleme und ihre Lösung werden hier ebenfalls vorgestellt. 
+
+\section{Treiber}
+
+Um mit der Hardware kommunizieren zu können, ist eine Treiber-Infrastruktur notwendig. Es werden memory-mapped Strukturen verwendet. Dies hat den Vorteil, dass man nicht jede einzelne Speicher- bzw. Geräteadresse einzeln ansprechen muss. Es reicht, die Basisadresse der Struktur zu setzen und die Strukturfelder werden vom Compiler automatisch auf inkrementierte Adressen abgebildet.
+Es wird eine Übereinstimmung der verwendeten Datenwortbreite und Reihenfolge zur Definition in \cref{tab:device_reg_map} vorausgesetzt.
+
+\begin{minted}{C}
+typedef struct
+{
+reg32_t control;
+reg32_t status;
+reg32_t data;
+} volatile device_t;
+\end{minted}
+
+Durch den \mintinline{C}|volatile|-Modifikator wird sichergestellt, dass bei jedem Zugriff immer der aktuelle Wert ausgelesen wird. Ohne diesen Modifikator darf der Compiler annehmen, dass der abgerufene Wert sich nie ändert und optimiert diese Stellen entsprechend. 
+Eine weitere Eigenschaft der Programmiersprache C wird ausgenutzt, um das Grundschema für einen Gerätetreiber zu erweitern: Eine Struktur an sich belegt keinen Speicher, erst ihre Felder. Das heißt man kann die \mintinline{C}|device_t|-Struktur als Feld in eine weitere Struktur integrieren als wären alle Felder zusammen in einer großen Struktur zusammengefasst.
+Um es nochmal zu verdeutlichen:
+
+\begin{minted}{C}
+typedef struct
+{
+device_t device;
+reg32_t reload;
+} counter_t;
+\end{minted}
+\captionof{listing}{Interrupt-Handler}
+\label{lst:interrupt_handler}
+und 
+
+\begin{minted}{C}
+typedef struct
+{
+// BEGIN device_t fields
+reg32_t control;
+reg32_t status;
+reg32_t data;
+// END device_t fields
+
+reg32_t reload;
+} counter_t;
+\end{minted}
+
+sind äquivalent.
+
+Es wäre hilfreich, zur Laufzeit erkennen zu können, welches Gerät man anspricht. Dafür wurde ein Gerätedeskriptor entwickelt, welcher eine Gerätestruktur aufnehmen kann und mit einer Gerätetypkennung versieht. Die aktuell unterstützen Geräte sind:
+\begin{easylist}
+	& Zähler
+	& Timer
+	& Interrupt Controller
+	& GPIO Port
+	& UART Controller
+	& SPI Controller
+	& Display Controller
+	& Dateisystem
+	& Unbekanntes Gerät (Standard-Wert)
+\end{easylist} 
+
+Zusätzlich zu den Strukturen, welche Geräte-Register abbilden, wurden allgemeine Funktionen entwickelt, die eine Arbeit mit allen kompatiblen Geräten vereinfachen. Die umgesetzten Funktionen sind in \cref{tab:drv_generic_func} aufgelistet. 
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l }
+		\textbf{Kernfunktion} & \textbf{Beschreibung} \\
+		\hline				
+		\texttt{kd\_await\_ready} & \multirow{2}{*}{\parbox{0.5\linewidth}{Blockierendes Warten auf Bereitschaft oder Daten}} \\
+		\texttt{kd\_await\_data}  \\
+		\hline
+		\texttt{kd\_reset} & \multirow{3}{*}{\parbox{0.5\linewidth}{Gerät zurücksetzen, aktivieren und deaktivieren}} \\
+		\texttt{kd\_enable}  \\
+		\texttt{kd\_disable} \\
+		\hline
+		\texttt{kdd\_read} & \multirow{2}{*}{\parbox{0.5\linewidth}{Datenregister des Geräts auslesen und beschreiben}} \\
+		\texttt{kdd\_write} \\
+		\hline
+		\texttt{kdc\_read} & \multirow{5}{*}{\parbox{0.5\linewidth}{Kontrollregister des Geräts gänzlich oder über Bitmaske auslesen und beschreiben}} \\
+		\texttt{kdc\_test} \\
+		\texttt{kdc\_write} \\
+		\texttt{kdc\_set} \\
+		\texttt{kdc\_unset} \\
+		\hline
+		\texttt{kds\_read} & \multirow{2}{*}{\parbox{0.5\linewidth}{Statusregister des Geräts gänzlich oder über Bitmaske auslesen}} \\
+		\texttt{kds\_write} \\
+		\hline
+	\end{tabular}
+	
+	\caption{Allgemeine Treiberfunktionen}
+	\label{tab:drv_generic_func}
+\end{table}
+
+%\subsection{UART}
+
+Der UART-Treiber ist trivial. Die umgesetzten Funktionen, welche in \cref{tab:drv_uart_func}  aufgelistet sind, sind nichts anderes als Aufrufe der Kernfunktionen. 
+
+Der Lese- bzw. Schreibzugriff ist auch über eine über eine UART-Datei möglich. Diese kann man über \mintinline{C}{FILE* uf = fopen("dev/uart0", /*modus*/);} öffnen.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l | l}
+		\textbf{Funktion} & \textbf{Beschreibung} & \textbf{Kernfunktion} \\
+		\hline		
+		\texttt{uart\_reset} & UART zurücksetzen & \texttt{kd\_reset} \\
+		\texttt{uart\_enable} & UART aktivieren & \texttt{kd\_enable} \\
+		\texttt{uart\_disable} & UART deaktivieren & \texttt{kd\_disable}\\
+		\texttt{uart\_read} & UART-Datenregister auslesen & \texttt{kdd\_read}\\
+		\texttt{uart\_write} & UART-Datenregister beschreiben & \texttt{kdd\_write}\\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Display-Controllers}
+	\label{tab:drv_uart_func}
+\end{table}
+
+
+%\subsection{Timer}
+
+Der Timer wird ebenfalls über einen Treiber konfiguriert. Ein Möglichkeit, die Zeiteihneit zu setzen (\SI{}{\tick}, \SI{}{\nano\second}, \SI{}{\micro\second}, \SI{}{\milli\second}, \SI{}{\second}) ist gegeben. Der Timer kann als selbstzurücksetzend konfiguriert werden, das heißt dass er kontinuierlich weiterzählt und bei jedem Erreichen des Schwellwertes einen Interrupt setzt und wieder beim Initialwert beginnt. Die Treiberfunktionen sind in \cref{tab:drv_timer_func} aufgelistet.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l }
+		\textbf{Funktion} & \textbf{Beschreibung} \\
+		\hline		
+		\texttt{timer\_set\_reload} & Neuen Zählwert setzen \\
+		\texttt{timer\_set\_unit} & Zeiteinheit setzen \\
+		\texttt{timer\_set\_autoreset} & Zähler automatisch zurücksetzen \\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Timers}
+	\label{tab:drv_timer_func}
+\end{table}
+
+
+%\subsection{Zähler}
+
+Mithilfe des Zählertreibers wird die Konfiguration vereinfacht. Es werden Strukturen und Funktionen eingeführt, um einen neuen Schwellwert zu setzen, den Zähler zurückzusetzen und zu aktivieren. Im Gegensatz zu anderen Geräten, dürfen hier nicht die generischen \texttt{kd\_enable} und \texttt{kd\_reset} Funktionen zum Aktivieren bzw. Zurücksetzen des Zählers verwendet werden, da der Schwellwert abhängig von der Zählrichtung zurückgesetzt wird und es zu undefiniertem Laufzeitverhalten kommen kann.
+Die Treiberfunktionen sind in \cref{tab:drv_counter_func} aufgelistet.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l }
+		\textbf{Funktion} & \textbf{Beschreibung} \\
+		\hline
+		\texttt{counter\_set\_reload} & Neuen Zählwert setzen \\
+		\texttt{counter\_reset} & Zähler zurücksetzen \\
+		\texttt{counter\_enable} & Zähler aktivieren \\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Zählers}
+	\label{tab:drv_counter_func}
+\end{table}
+
+%\subsection{Display Controller}
+
+Für den Display-Controller wurden in \cref{tab:drv_display_func} aufgelistete Funktionen umgesetzt. Der Zugriff auf den Videopuffer erfolgt über die Dateisystem-Abstraktionsschicht (empfohlen) über  \mintinline{C}{FILE* df = fopen("dev/display0", /*modus*/);} oder alternativ direkt über die Display-Struktur bzw. generische Treiberfunktionen. 
+Der Rastermodus ist derzeit nicht von der Hardware unterstützt. 
+
+\alertwarning{Der Treiber für den Display-Controller kann nicht ohne Weiteres erweitert werden: es wird vorausgesetzt, dass das Datenregister an letzter Stelle steht, da dieses das erste Element des Videopuffers darstellt. }
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l | l }
+		\textbf{Funktion} & \textbf{Beschreibung} & \textbf{Kernfunktion} \\
+		\hline		
+		\texttt{display\_reset} & Display zurücksetzen & \texttt{kd\_reset} \\
+		\texttt{display\_enable} & Display aktivieren & \texttt{kd\_enable} \\
+		\texttt{display\_disable} & Display deaktivieren & \texttt{kd\_disable}\\
+		\texttt{display\_set\_textmode} & Textmodus setzen & \\
+		\texttt{display\_set\_graphicmode} & Rastermodus setzen & \\
+		\texttt{display\_flush} & Videopuffer darstellen & \\
+		\texttt{display\_clear} & Displayinhalt leeren & \\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Display-Controllers}
+	\label{tab:drv_display_func}
+\end{table}
+
+%\subsection{Interrupt Controller}
+
+Die umgesetzten Treiberfunktionen des Interrupt-Controllers sind in \cref{tab:drv_irc_func} aufgelistet. Die \glspl{IRQ}, die verwendet werden dürfen, entsprechen exakt den Angaben aus \cref{tab:interrupts}.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l }
+		\textbf{Funktion} & \textbf{Beschreibung} \\
+		\hline		
+		\texttt{irc\_is\_set} & Prüfen, ob \gls{IRQ} gesetzt \\
+		\texttt{irc\_clear} & \gls{IRQ} zurücksetzen \\
+		\texttt{irc\_set\_mask} & Maske für \gls{IRQ} setzen \\
+		\texttt{irc\_set\_pol} & Polarität für \gls{IRQ} setzen \\
+		\texttt{irc\_set\_edge} & Flankenerkennung für \gls{IRQ} setzen \\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Interrupt-Controllers}
+	\label{tab:drv_irc_func}
+\end{table}
+
+\section{Adresszuordnung}
+
+In der Datei \textit{plasma\_soc.h} werden die Hardwareadressen definiert und die entsprechenden Gerätestrukturen an diese gebunden, sodass der Umgang mit Adressen und Typumwandlungen entfällt. Die Zuordnung entspricht exakt der Definition in \cref{tab:address_map}.
+
+
+\section{Interrupthandler}
+\label{cha:irc_global_isr}
+Der von Philipp Tofahrn entwickelte Interrupt-Handler hatte, wie in \cref{ss:uart} bereits geschildert, Schwierigkeiten mit der Verarbeitung von Interrupts, die konstant auf logisch 1 gesetzt waren: bereits behandelte Interrupts werden in derselben Routine erneut behandelt, was zu einer Dauerschleife führt. Der auswertende Teil des Interrupt-Handlers wurde in den Kernel-Bereich verlagert und unter Zuhilfenahme der Treiberinfrastruktur in C umgeschrieben, genauso die Interrupt-Registrierungs-Routine. Das vorhin genannte Problem wurde durch Ignorieren bereits behandelter Interrupts in einem (atomaren) Handler-Aufruf beseitigt.
+
+\section{Dynamisches Speichermanagement}
+\label{sec:memalloc}
+
+Das dynamische Speichermanagement ist notwendig, um zur Laufzeit neue Speicherblöcke allozieren und Programme flexibler gestalten zu können. Da für den Plasma kein vollwertiges Betriebssystem verfügbar ist und aus Speichermangel auf die Verwendung der C-Standardbibliothek verzichtet wurde, ist eine eigene Implementierung der \texttt{malloc} unf \texttt{free} Funktionen notwendig. Bei einem vollwertigen Betriebssystem würden diese über einen Syscall den Kernel anweisen, einen freien Speicherblock zurückzugeben. Auch darauf wurde hier verzichtet, stattdessen rufen diese unmittelbar die \texttt{kmalloc} und \texttt{kfree} Umsetzungen der Firmware auf. Die Umsetzung, die von EmbeddedArtistry \cite{website:embedded_artistry_malloc} übernommen wurde, baut auf einer verketteten Liste auf und gibt den jeweils ersten der angeforderten Größe entsprechenden Speicherblock zurück. 
+
+\section{I/O}
+
+Es wurde eine neue Abstraktionsschicht zur Kommunikation mit den Geräten eingeführt. Diese bietet, ähnlich wie bei UNIX-artigen Betriebssystemen, dateibasierten Zugriff auf Geräte. Beispielsweise schreiben \mintinline{C}{fprint(display_file, "TEST")} und \mintinline{C}{fprint(uart_file, "TEST")} jeweils die Zeichenfolge \enquote{TEST} in den Video- und \gls{UART}-Puffer.  
+Um dies zu ermöglichen, wurde eine \texttt{FILE}-Datenstruktur entworfen, welche einen Gerätedeskriptor sowie Ein- und Ausgabepuffer und die aktuelle Lese/Schreibposition abstrahiert. Über Funktionen, die mit den Datei-Funktionen aus der C-Standardbiblithek kompatibel sind, lassen sich Dateistrukturen öffnen, auslesen und beschreiben.
+Essentiell hierfür ist die in \cref{sec:memalloc} beschriebene dynamische Speicherallokation, mit der zur Laufzeit neue Dateistrukturen und Puffer alloziert werden können.
+
+\section{Toolchain}
+
+Im weiteren Entwicklungsverlauf wurde festgestellt, dass weder Multiplikation noch Division funktionierten. Durch intensive Fehlersuche mithilfe von Objdump, dem Xilinx-Simulator und Analyse der Toolchain-Dateien wurde festgestellt, dass von Anfang an im Rahmen der Veranstaltung \textit{\subjectphv{}} Binärcode für die falsche Prozessorarchitektur generiert wurde, nämlich für \gls{MIPS}-32 statt \gls{MIPS}-\RN{1}. 
+
+Dadurch, dass die Opcodes weitestgehend identisch sind, ist der Fehler nicht früher aufgefallen, ein Vergleich ist in \cref{lst:mips32_code} und \cref{lst:mips_i_code} zu sehen. 
+
+\begin{code}	
+	\begin{minted}[autogobble, highlightlines=11]{objdump}
+	00000030 <.text>:
+	30:	3c02002f lui	v0,0x2f
+	34:	3442af08 ori	v0,v0,0xaf08
+	38:	00000000 nop
+	3c:	2442ffff addiu	v0,v0,-1
+	40:	1440fffd bnez	v0,0x38
+	44:	00000000 nop
+	48:	03e00008 jr	ra
+	4c:	00000000 nop
+	50:	240230d4 li	v0,12500
+	54:	70822002 mul	a0,a0,v0
+	58:	24030004 li	v1,4
+	5c:	3c022000 lui	v0,0x2000
+	\end{minted}
+	
+	\caption{MIPS-32 code (Für Plasma nicht geeignet)}
+	\label{lst:mips32_code}
+\end{code}
+
+\begin{code}	
+	\begin{minted}[autogobble, highlightlines=11]{objdump}
+	00000030 <.text>:
+	30:	3c02002f lui v0,0x2f
+	34:	3442af08 ori v0,v0,0xaf08
+	38:	00000000 nop
+	3c:	2442ffff addiu v0,v0,-1
+	40:	1440fffd bnez v0,0x38
+	44:	00000000 nop
+	48:	03e00008 jr	ra
+	4c:	00000000 nop
+	50:	240230d4 li v0,12500
+	54:	00820018 mult a0,v0
+	58:	24030004 li v1,4
+	5c:	3c022000 lui v0,0x2000
+	\end{minted}
+	\caption{MIPS-\RN{1} code}
+	\label{lst:mips_i_code}
+\end{code}
+
+Als Konsequenz wurden die Compilerflags \texttt{-fno-pic -mips32 -mno-abicalls -nostdlib} auf \texttt{-fno-pic -mips1 -mgp32 -mfp32 -mno-abicalls -nostdlib} geändert.
+
+\alertwarning{Gleitkommazahlen werden nicht unterstützt! Die Compilerflags sind auf Hard-float eingestellt, allerdings ist kein Gleitkomma-Coprozessor vorhanden.}
+
+Je größer die getesteten Programme wurden, desto öfter sind Probleme mit der Objektdateistruktur aufgefallen. Das Linker-Skript musste mehrmals modifiziert werden. Viele Probleme waren durch (falsche) Speicherausrichtung (Aligning) verursacht. Dadurch war die Adresse des \gls{GP} falsch und die Initialisierungssequenz schrieb in unzulässige Speicherbereiche, z.B wurde die \texttt{.bss, .sbss} Bereiche mit ungültigen Daten überschrieben. Deswegen wurden globale Variablen nur sehr geizig eingesetzt und bei Möglichkeit durch Makros und lokale Variablen (Stack) ersetzt.
+
+\alertwarning{Diese Probleme sind nach den Änderungen sehr viel seltener geworden, aber nicht komplett ausgemerzt und scheinen von der Programmgröße abhängig zu sein.}

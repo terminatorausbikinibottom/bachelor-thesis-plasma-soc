@@ -1,0 +1,300 @@
+% !TeX document-id = {2d737b5d-5c14-433d-833c-41255b99c05e}
+
+% arara: pdflatex: { shell : yes, synctex: on }
+% arara: biber
+% arara: makeglossaries
+% arara: texindy: { language: english }
+% arara: pdflatex: { shell : yes, synctex: on }
+% arara: pdflatex: { shell : yes, synctex: on }
+
+\documentclass[
+ngerman,
+parskip=half,
+headsepline,
+fontsize=12pt,
+DIV=13,
+listof=totoc,
+]{scrreprt}
+
+\usepackage{morewrites}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+% Basic Look & Feel
+\usepackage[german]{babel}
+\usepackage[useregional]{datetime2}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% new Functions
+\usepackage{amsmath}
+%\usepackage{graphicx}
+\usepackage{xargs}                      % Use more than one optional parameter in a new commands
+\usepackage[pdftex,dvipsnames, table]{xcolor}  % Coloured text etc.
+%\usepackage{array}
+%\usepackage{booktabs}
+%\usepackage{xspace}
+\usepackage{fvextra}
+\usepackage{csquotes}
+\usepackage{enumitem}
+%\usepackage{listings}
+\usepackage{float}
+
+% Inspirational quotes
+\usepackage{epigraph}
+
+% lists
+\usepackage[ampersand]{easylist}
+
+% SI units
+\usepackage[binary-units=true]{siunitx}
+\DeclareSIUnit\pixel{pixel}
+\DeclareSIUnit\tick{tick}
+\DeclareSIUnit\baud{Bd}
+
+% 
+\usepackage{tikz}
+\usepackage[siunitx]{circuitikz}
+\usepackage{tikz-timing}
+\usetikztiminglibrary{nicetabs}
+\usetikzlibrary{shapes.geometric, shapes.misc, arrows, automata, calc, fit, patterns, positioning, decorations.text}
+\tikzstyle{startstop} = [rectangle, rounded corners, minimum width=3cm, minimum height=1cm,text centered, draw=black, fill=red!30]
+\tikzstyle{io} = [trapezium, trapezium left angle=70, trapezium right angle=110, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=blue!30]
+
+\tikzstyle{process} = [rectangle, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=orange!30]
+\tikzstyle{decision} = [diamond, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=green!30]
+
+\newcommand{\tikzmark}[2]{%
+	\tikz[overlay,remember picture] \node[text=black, inner sep=2pt] (#1) {#2};}
+
+\makeatletter
+\newcommand\currentcoordinate{\the\tikz@lastxsaved,\the\tikz@lastysaved}
+
+\tikzdeclarecoordinatesystem{+}{%
+	\tikz@scan@one@point\pgfutil@firstofone+(#1)%
+}
+
+\makeatother
+
+\makeatletter
+\newcommand*{\textoverline}[1]{$\overline{\hbox{#1}}\m@th$}
+\makeatother
+
+%\tikzstyle{io} = [trapezium, trapezium left angle=70, trapezium right angle=110, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=blue!30]
+
+%\tikzstyle{process} = [rectangle, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=orange!30]
+%\tikzstyle{decision} = [diamond, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=green!30]
+
+%\tikzstyle{arrow} = [thick,->,>=stealth]
+
+%\usepackage[Algorithmus]{algorithm}
+%\usepackage{algorithmic}
+
+
+% Customization of Looks
+\usepackage[bf]{caption}
+%\usepackage[automark]{scrlayer-scrpage}
+%\usepackage{setspace}
+%\onehalfspacing
+
+% figures
+%\usepackage{wrapfig}
+%\setlength{\intextsep}{0pt}
+
+%\newcommand{\nopar}{{\parfillskip=0pt \par}}
+
+
+
+\usepackage{color}
+\usepackage{bera}
+
+\usepackage{multirow}
+\usepackage{subcaption}
+
+\usepackage{makecell}
+
+% float stuff
+%\renewcommand{\topfraction}{.85}
+%\renewcommand{\bottomfraction}{.7} % .3 in kernel.
+%\renewcommand{\textfraction}{.15}
+%\renewcommand{\floatpagefraction}{.7}
+%\renewcommand{\dbltopfraction}{.66}
+%\renewcommand{\dblfloatpagefraction}{.66}
+%\setcounter{topnumber}{9}
+%\setcounter{bottomnumber}{9}
+%\setcounter{totalnumber}{20}
+%\setcounter{dbltopnumber}{9}
+
+\usepackage{alertmessage}
+
+%\usepackage{parcolumns}
+
+
+% References & PDF-Fun
+\usepackage[hyphens]{url}
+\usepackage[htt]{hyphenat}
+\usepackage[hidelinks,linktoc=all]{hyperref}
+\usepackage{cleveref}
+
+\usepackage{textcomp}
+
+\renewcommand{\textrightarrow}{$\rightarrow$}
+%--------------------------------------------------------------------------------
+%\lohead[]{}
+%\rohead[]{\leftmark}
+%\cohead[]{}
+
+
+
+% Code highlighting
+\usepackage[chapter]{minted}
+%\AtBeginEnvironment{listing}{\setcounter{listing}{\value{lstlisting}}}
+%\AtEndEnvironment{listing}{\stepcounter{lstlisting}}
+
+
+
+% Create a new environment for breaking code listings across pages.
+\newenvironment{code}{\captionsetup{type=listing}}{}
+
+\captionsetup{format=plain,indention=2em}
+
+\setminted[vhdl] {
+	bgcolor=lightgray, 
+	linenos,
+	obeytabs=true,
+	tabsize=2, 
+	breaklines=true,
+	firstnumber=1
+}
+
+\setminted[C] {
+	bgcolor=lightgray, 
+	linenos,
+	obeytabs=true,
+	tabsize=2, 
+	breaklines=true,
+	firstnumber=1
+}
+
+\setminted[objdump] {
+	bgcolor=lightgray, 
+	linenos,
+	obeytabs=true,
+	tabsize=2, 
+	breaklines=true,
+	firstnumber=1
+}
+
+\usepackage[backend=biber, style=ieee]{biblatex}
+\addbibresource{bibliography.bib} 
+
+\usepackage[useregional]{datetime2}
+
+\newcommand{\subjectphv}{Prozessorhardware mit VHDL}
+\newcommand{\supervisor}{Prof. Dr. Weber}
+
+%\usepackage{texosquery}
+
+
+% glossaries
+\usepackage[xindy, nonumberlist, toc, acronym]{glossaries}
+\makeglossaries
+\usepackage[xindy]{imakeidx}
+\makeindex
+
+\usepackage{xparse}
+\DeclareDocumentCommand{\newdualentry}{ O{} O{} m m m m } {
+	\newglossaryentry{gls-#3}{name={#5},text={#5\glsadd{#3}},
+		description={#6},#1
+	}
+	\makeglossaries
+	\newacronym[see={[Glossary:]{gls-#3}},#2]{#3}{#4}{#5\glsadd{gls-#3}}
+}
+
+\GlsSetXdyCodePage{duden-utf8}
+
+
+\DeclareCiteCommand{\citeauthorfirstlast}
+{\boolfalse{citetracker}%
+	\boolfalse{pagetracker}%
+	\DeclareNameAlias{labelname}{first-last}%
+	\usebibmacro{prenote}}
+{\ifciteindex
+	{\indexnames{labelname}}
+	{}%
+	\printnames{labelname}}
+{\multicitedelim}
+{\usebibmacro{postnote}}
+
+\DeclareCiteCommand{\citeauthorlastfirst}
+{\boolfalse{citetracker}%
+	\boolfalse{pagetracker}%
+	\DeclareNameAlias{labelname}{last-first}%
+	\usebibmacro{prenote}}
+{\ifciteindex
+	{\indexnames{labelname}}
+	{}%
+	\printnames{labelname}}
+{\multicitedelim}
+{\usebibmacro{postnote}}
+
+
+% setup index / listoftables / list of figures spacing 
+\usepackage{etoolbox}
+\makeatletter
+\renewcommand*\l@figure{\@dottedtocline{1}{1em}{3.2em}}	
+\let\l@table\l@figure
+\makeatother
+
+\renewcommand\listoflistingscaption{Quellcodeverzeichnis}
+
+%\usepackage[colorinlistoftodos,prependcaption,textsize=tiny]{todonotes}
+%\newcommandx{\unsure}[2][1=]{\todo[linecolor=red,backgroundcolor=red!25,bordercolor=red,#1]{#2}}
+%\newcommandx{\change}[2][1=]{\todo[linecolor=blue,backgroundcolor=blue!25,bordercolor=blue,#1]{#2}}
+%\newcommandx{\info}[2][1=]{\todo[linecolor=OliveGreen,backgroundcolor=OliveGreen!25,bordercolor=OliveGreen,#1]{#2}}
+%\newcommandx{\improvement}[2][1=]{\todo[linecolor=Plum,backgroundcolor=Plum!25,bordercolor=Plum,#1]{#2}}
+
+
+%\newcommand{\minipagetodo}[1]{\textcolor{red}{\textbf{TODO: #1}}}
+
+%\graphicspath{images/}  % where are the images?
+
+%\makeindex
+%\makeglossaries
+\setacronymstyle{long-short}
+\loadglsentries{glossary}
+
+\begin{document}
+	\pagenumbering{Alph}
+	\input{chapters/titlepage}
+	
+	\input{chapters/abstract}
+	\input{chapters/authorship}
+	\input{chapters/acknowledgement}
+	
+	\pagenumbering{Roman}
+	\tableofcontents
+	
+	\printglossary[style=altlist,title=Glossar]
+	\printacronyms[title=Abkürzungsverzeichnis]
+	
+	\listoffigures
+	\listoftables			
+	\listoflistings
+	\clearpage
+	\pagenumbering{arabic}
+	
+	\input{chapters/introduction}	
+	\input{chapters/materials}
+	\input{chapters/theory}
+	\input{chapters/architecture}
+	\input{chapters/implementation}
+	\input{chapters/synopsis}	
+	
+	\printbibliography[title={Literaturverzeichnis}]	
+	\appendix
+	\include{chapters/appendix}
+	%\include{chapters/listings}	
+	
+\end{document}     

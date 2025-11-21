@@ -1,0 +1,86 @@
+\chapter{Analyse}
+\label{cha:analysis}
+
+In diesem Kapitel wird der aktuelle Stand des Plasma-Prozessors, dessen Firmware und der Toolchain untersucht sowie Integrationsmöglichkeiten für neue Komponenten evaluiert. 
+
+\section{Plasma}
+\label{ana:plasma}
+
+In \cref{the:plasma} wurde eine kurze Übersicht über den Plasma-Prozessor gegeben. In diesem Abschnitt wird näher auf die zugrundeliegende Infrastruktur eingegangen. 
+
+Der Plasma-Prozessor positioniert sich durch Angaben des Entwicklers als ein \gls{MIPS}-Mikroprozessor, welcher in der aktuellsten Version in der Lage ist, mit dem beigefügten \gls{RTOS} einen Webserver auszuführen. In der Veranstaltung \textit{\subjectphv{}} wurde allerdings festgestellt, dass die aktuellste Version nicht ohne Weiteres lauffähig ist, weswegen auf die eingeschränkte Vorversion, welche in \enquote{\subjectphv{}} verwendet und erweitert wurde, zurückgegriffen wurde. Diese ist sehr rudimentär gehalten und bietet nicht genug den Embedded-Bereich relevante Features. 
+
+Die einzigen Ein- und Ausgabe-Möglichkeiten beschränken sich auf \gls{UART}, einen einzigen \gls{GPIO}-Port und einen einzigen Zähler. Der Plasma hat darüber hinaus Anbindung auf internen und externen Arbeitsspeicher, der externe erfordert allerdings einen funktionsfähigen \gls{DDR SDRAM}-Controller, dessen Umsetzung nicht trivial ist. Es wird deshalb nur der interne Speicher, dessen Größe auf \SI{8}{\kilo\byte} beschränkt ist, verwendet. Daraus ergeben sich starke Einschränkungen für mögliche Programmgrößen.
+
+Die oben genannten Komponenten sind manuell über einen Adressdekoder und händisch definierte Register und Leitungen (weiter \enquote{\gls{Interconnect}} genannt) an die \gls{CPU} angebunden. Daraus ergibt sich ein schwerwiegendes Entwicklungs- und Wartungsproblem. Jede Änderung am \gls{Interconnect} erfordert die Prüfung aktuell reservierter Adressen, Anpassung an mehreren Stellen - nämlich separat für Lese- und Schreibzugriffe sowie die Erstellung unzähliger weiterer Register und Leitungen. Das ist sehr fehleranfällig und nicht wartbar, sofern man mehr und komplexere Peripheriegeräte anbinden möchte - was in dieser Arbeit der Fall ist.
+
+Darum wird im Verlauf dieser Arbeit auf ein neues Konzept unter Verwendung des in \cref{the:bus_system} beschriebenen Wishbone-Buses gesetzt. Aufgrund starker Architekturveränderungen soll, um mögliche Probleme zu vermeiden, eine saubere Version heruntergeladen und schrittweise auf den Stand aus der Veranstaltung \subjectphv{} und darüber hinaus erweitert werden.  
+
+Die erforderlichen Funktionsblöcke sind:
+\begin{easylist}[itemize]
+	& Wishbone-Bus und Arbiter
+	& Interner \gls{RAM}
+	& Externer \gls{RAM}	
+	& Interrupt-Controller
+	& \gls{UART}
+	& Timer
+	& Zähler
+	& \gls{GPIO}
+	& \gls{SPI}
+	& Display-Controller
+\end{easylist}
+
+\section{Firmware}
+\label{ana:firmware}
+
+Die zur Plasma-Version passende Firmware muss für fortgeschrittene Einsatzzwecke drastisch erweitert werden, da sie ledeglich Hilfsfunktionen zum Auslesen von Speicher sowie UART Ein- und Ausgabehelfer mitliefert. Es müssen Treiber für sämtliche Hardware-Komponenten entwickelt werden, da die Arbeit über Hardware-Adressen unhandlich, unwartbar und fehleranfällig ist. 
+
+Dazu gehören die Treiber für:
+\begin{easylist}[itemize]
+	& Interrupt-Controller
+	& \gls{UART}
+	& Timer
+	& Zähler
+	& \gls{GPIO}
+	& Display-Controller
+\end{easylist}
+
+Außerdem wird dynamisches Speichermanagement und eine Dateisystem-artige Abstraktion für Geräte wie die Display- und \gls{UART}-Controller entwickelt. Ein solches Verfahren ist bei UNIX-artigen Betriebssystemen die Regel.
+
+\section{Display-Controller}
+\label{ana:dispc}
+
+Das ZedBoard verfügt über ein Display mit der Modellnummer \textit{UG-2832HSWEG04} von Inteltronic/Wisechip. Eine \SI{128 x 32}{\pixel} große, monochrome, passive Matrix steht zur Verfügung. Das Display ist \SI{30 x 11.5 x 1.45}{\milli\meter} groß. \cite[18]{manual:zedboard}
+
+Eine Umsetzung des dedizierten Display-Controllers speziell für das ZedBoard, aufbauend auf dem Beispielprojekt von Digilent, wurde bereits von Michael Mattioli in seinem Projekt \textquote{ZedBoard OLED Display}\cite{website:zedboard_oled} vorgenommen. 
+
+Diese Umsetzung umfasst die Initialisierungssequenz für den Display-Controller, eine fest konfigurierte Beispiel-Sequenz sowie einen fest konfigurierten ASCII-\gls{ROM}. Sie wurde auf dem zur Verfügung gestelltem ZedBoard überprüft und als Ausgangsbasis für die Weiterentwicklung benutzt. Da dieser Display-Controller als eine autarke Einheit arbeitet, muss eine Möglichkeit geschaffen werden, das Display über Software zu konfigurieren und zu beschreiben. Dazu ist im ersten Schritt eine Verbindung zur Plasma-\gls{CPU} zu schaffen und im nächsten die notwendigen Treiber für die Beispielanwendung. 
+
+
+\section{Beispielanwendung}
+\label{ana:sample_app}
+
+Die Beispielanwendung soll die Funktion aller entwickelten Hardware- und Software-Blöcke, vor allem jedoch des Displays demonstrieren. 
+Auf dem Display soll eine laufende Uhr mit der vergangenen Zeit seit Systemstart dargestellt werden. Über \gls{UART} sollen Eingaben von einem Rechner entgegegengenommen und ebenfalls auf dem Display dargestellt werden. Die auf dem ZedBoard verfügbare \gls{LED}-Leiste soll über \gls{GPIO} als Lauflicht angesteuert werden und der aktuelle \gls{LED}-Status auf dem Display ausgegeben werden. Die Zeitsteuerung erfolgt über Timer und als Timer konfigurierte Zähler. Die Behandlung der Timer-, Zähler- und \gls{UART} Ereignisse erfolgt unter Verwendung des Interrupt-Controllers. 
+
+\section{Materialien}
+
+Benötigte Hardware:
+\begin{easylist}[itemize]
+	& \enquote{Digilent ZedBoard} Entwicklungs- und Evaluationsboard
+	& \gls{UART}-\gls{PMOD}
+\end{easylist}
+
+Benötigte Software: 
+
+\begin{easylist}[itemize]
+	& CMake
+	& MIPS-Crosscompiler
+	& Xilinx Vivado
+	& Code-Editor
+	& Versionsverwaltungssystem
+\end{easylist}
+
+Als Code-Editor wird Visual Studio Code mit Erweiterungen für C/C++ und VHDL unter Mac OS X verwendet. Zur Code-Versionierung wird git benutzt. 
+Die Software-Kompilation erfolgt mit CMake und GNU-MIPS Crosscompilern unter Ubuntu 64-bit 16.04.4.
+Die Hardware-Synthese und Simulation werden mit Xilinx Vivado 2017.4 unter Windows 10 durchgeführt.

@@ -1,0 +1,30 @@
+\chapter{Einleitung}
+\label{cha:introduction}
+
+Diese Bachelorarbeit befasst sich mit der Portierung und Erweiterung eines \enquote{Plasma}-Systems \cite{website:plasma_cpu} von \glspl{FPGA} des Herstellers Xilinx auf \glspl{FPGA} des Herstellers Altera/Intel. Betrachtet werden hierbei sowohl die Hard- als auch Softwareaspekte. 
+
+Dieses Kapitel dient der Einführung in die Bachelorarbeit und die Problemstellung.
+
+\section{Motivation}
+
+Langfristig gesehen soll es möglich sein, einen hardware-basierten Beschleuniger zur Bildklassifizierung mittels binarisierter neuronaler Netze\cite{thesis:soc_bnn} in das zugrundeliegende \enquote{Plasma}-System zu integrieren. Bevor dies geschehen kann, muss das \enquote{Plasma}-System auf eine mit der Altera-OpenCL-Toolchain kompatible Hardware-Basis portiert und erweitert werden. 
+
+\section{Problemstellung}
+
+Derzeit ist das Plasma-\gls{SoC} nur auf dem Digilent Zedboard\footnote{\url{http://zedboard.org/product/zedboard}} mit einem Zynq-7000 \gls{FPGA} lauffähig. Ziel der Arbeit ist es, eine Portierung für das Terasic DE1-SoC\footnote{\url{https://www.terasic.com.tw/cgi-bin/page/archive.pl?Language=English&No=836}} Board mit einem Cyclone V \gls{FPGA} vorzunehmen, und es soweit zu erweitern, dass eine einfache Kommunikation mit den Komponenten und Peripherie wie z.B \gls{DMA}-Controller und externem \gls{RAM} möglich wird. Dafür soll ebenso die Software-Basis in Form von Firmware, Bertriebssystem und  Hilfs-Software angepasst und erweitert werden. 
+
+\section{Anforderungen}
+
+Das Plasma-System soll auf dem \gls{FPGA} des DE1-SoC-Board lauffähig sein und mit einem \gls{ARM} Prozessor kommunizieren können. Außerdem soll ein auf dem DE1-SoC-Board auszuführendes Linux-Betriebssystem eingerichtet werden, welches auf das Plasma-System zugreifen können soll. Um die Funktionsfähigkeit der Lösung zu beweisen, sollen Beispielanwendungen entwickelt und auf dem Plasma-System und der \gls{ARM}-CPU unter Linux ausgeführt werden. Zusätzlich soll ein für das Linux-Betriebssystem zu entwickelnder Treiber das Plasma-System ansteuern können.
+
+\section{Organisation dieser Arbeit}
+
+In \cref{cha:materials} werden die in dieser Bachelorarbeit verwendeten Materialien beschrieben.
+
+Anschließend werden in \cref{cha:basics} die für ein besseres Verständnis notwendigen Grundlagen erklärt.
+
+Darauffolgend werden in \cref{cha:architecture} die Systemarchitekturen vorgestellt, die im Verlauf dieser Bachelorarbeit umgesetzt werden.
+
+In \cref{cha:implementation} wird die Umsetzung in Hardware und Software sowie die Erstellung eines lauffähigen Linux-Systems im Detail behandelt. 
+
+Die in vorangehenden Kapiteln gewonnenen Erkenntnisse werden in \cref{cha:synopsis} zusammengefasst und und ein Ausblick auf zukünftige Entwicklung vorgestellt. 

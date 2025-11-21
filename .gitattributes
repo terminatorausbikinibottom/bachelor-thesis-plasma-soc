@@ -1,0 +1,2 @@
+/dvd/linux-socfpga-socfpga-4.9.78-ltsi.zip filter=lfs diff=lfs merge=lfs -text
+/dvd/ubuntu-4.9.78.img.gz filter=lfs diff=lfs merge=lfs -text

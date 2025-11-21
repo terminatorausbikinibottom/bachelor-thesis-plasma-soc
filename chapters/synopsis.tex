@@ -1,0 +1,34 @@
+\chapter{Ergebnisse und Ausblick}
+\label{cha:synopsis}
+
+In diesem Kapitel werden die Ergebnisse dieser Bachelorarbeit zusammengefasst und künftige Entwicklungsmöglichkeiten erörtert. Es werden sowohl neue Möglichkeiten, als auch Einschränkungen des entstandenen Systems besprochen. 
+
+\section{Zusammenfassung}
+
+Mit der Einführung des Wishbone-Bus wird ein Ausbau des Plasma-Systems mit eigens entwickelten Komponenten und frei verfügbaren IP-Cores von OpenCores deutlich vereinfacht, da vorher keine standardisierte Schnittstelle zur Plasma-\gls{CPU} gegeben war. 
+
+Die Erweiterung des Plasma-Systems um eine Wishbone{$\leftrightarrow$}Avalon-\gls{Bridge} ermöglicht die Integration als IP-Core in Altera/Intel-\gls{FPGA}-basierte Projekte. Erst mit Einführung dieser Bridge wird eine einfache Anbindung der DE1-SoC-spezifischen Komponenten, wie dem verlötetem SDRAM-Chip, der \gls{ARM}-\gls{CPU}, Schalter, Taster, LEDs und 7-Segmentanzeigen, an das Plasma-\gls{SoC} möglich. 
+
+Durch die Anbindung des externen SDRAM-Chips erhöht sich der im Plasma-System verfügbare Arbeitsspeicher von \SI{8}{\kilo\byte} 
+auf über \SI{64}{\mega\byte}, was die Verarbeitung größerer Datenmengen und komplexere Anwendungen ermöglicht. 
+
+Korrekturen des Wishbone-Busses und die Einführung eines neuen Bus-Arbiters legen den Grundstein für einen ordnungsgemäßen Multi-Master-Betrieb. Das System arbeitet in diesem Modus sobald ein Zugriff auf das Plasma-\gls{SoC} über die Wishbone{$\leftrightarrow$}Avalon-\gls{Bridge} erfolgt. 
+
+Die Erstellung eines Linux-Betriebssystems auf Basis eines vorgefertigten Systemabbilds ist ein wichtiger Schritt zur vollen Nutzung der Möglichkeiten, die ein \gls{SoC}-\gls{FPGA} bietet. Das Betriebssystem wird auf dem \gls{ARM}-Prozessor ausgeführt, und greift über einen Treiber und mehrere Benutzeranwendungen auf das Plasma-\gls{SoC} zu. Um den Zugriff auf das Plasma-\gls{SoC} zu ermöglichen, wurde ein aktueller Linux-Kernel konfiguriert und kompiliert, die Linux-Treiber aktualisiert und eine eigene, auf das DE1-SoC-Board und Plasma-\gls{SoC} zugeschnittene Devicetree-Beschreibung entwickelt. 
+
+Der entwickelte Treiber steuert die Reload-Register der Zähler im Plasma-\gls{SoC} an. 
+
+Leider hat die Bearbeitungszeit nicht mehr ausgereicht, um das Plasma-\gls{SoC} mit einer ausführbaren Datei aus dem Linux-Betriebssystem heraus zu programmieren. Aus dem selben Grund konnten für das Plasma-\gls{SoC} keine Regressionstests auf dem Digilent Zedboard durchgeführt werden. 
+  
+\section{Ausblick}
+
+Der Wishbone-Bus ist in der einfachsten Variante umgesetzt und unterstützt keine Bursttransfers, atomare \Gls{RMW}-Zyklen und split transactions. Pipelining wurde ebenfalls nicht erprobt, da dafür eine Erweiterung der Wishbone-Slaves notwendig wäre. Für einen performanteren Betriebsablauf könnten diese Features implementiert werden. 
+
+Gegebenenfalls könnte eine Plasma-\gls{SoC} \gls{CSR}-Komponente entwickelt werden, die das Auslesen von Statusflags und Anhalten des Plasma-Prozessors von außen ermöglicht. Ein denkbarer Anwendungsfall wäre die Umprogrammierung, da das Verhalten der Plasma-\gls{CPU} beim Überschreiben des Programmspeichers im laufenden Betrieb derzeit nicht absehbar ist. 
+
+Zudem könnten Linux-Treiber für weitere Komponenten des Plasma-\gls{SoC}, wie z.B. Timer und \glspl{GPIO}, sowie ein Treiber, welcher die Speicher des Plasma-\gls{SoC} als eine konsekutive Datei abbildet, entwickelt werden. 
+
+Basierend auf dem \gls{ELF}-Converter-Skript könnte für den Plasma-Prozessor ein \gls{ELF}-Loader entwickelt werden, sodass eine Programmierung aus dem Linux-Betriebssystem heraus möglich wird. 
+
+Da dem Plasma-\gls{SoC} nun deutlich mehr Arbeitsspeicher zur Verfügung steht, wäre die Portierung eines Embedded-Betriebssystems wie z.B FreeRTOS\footnote{\url{https://www.freertos.org/}} oder Zephyr\footnote{\url{https://www.zephyrproject.org/}} eine erwägenswerte Verbesserungsmöglichkeit. 
+

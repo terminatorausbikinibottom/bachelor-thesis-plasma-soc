@@ -1,0 +1,235 @@
+\chapter{Systemarchitektur}
+\label{cha:architecture}
+
+Dieses Kapitel beschreibt die vorhandene Architektur, schlägt neue vor und dient dem besseren Verständnis über die Umsetzung in \cref{cha:implementation}.
+
+Im \cref{sec:arch_plasma} wird die Architektur des Ausgangssystems in der Version 2.1 beschrieben.
+
+Im \cref{sec:arch_plasma_soc_zedboard} wird eine neue Architektur, die den Wishbone-\gls{Interconnect} nutzt, neue Komponenten aufweist und speziell auf das Zedboard zugeschnitten ist, vorgestellt. 
+
+Im \cref{sec:arch_plasma_soc_de1_soc} werden zwei neue Architekturen vorgeschlagen. Die erste stellt einer Portierung auf das DE1-SoC Board dar, in der zweiten wird die erste Architektur erneut aufgegriffen und erweitert. 
+
+\tikzstyle{block} = [draw, fill=white, rectangle, minimum height=3em, minimum width=6em]
+
+\tikzset{
+	block crossed out/.style={
+		block,
+		append after command={
+			node [
+				fit=(\tikzlastnode),
+				draw=red,
+				thick,
+				inner sep=-\pgflinewidth,
+				cross out
+			] {}
+		}
+	}
+}
+
+\tikzstyle{sum} = [draw, fill=white, circle, node distance=1cm]
+\tikzstyle{pinstyle} = [pin edge={to-,thin,black}]
+\tikzstyle{container} = [draw, rectangle, dashed, inner sep=2em]
+
+\section{Plasma}
+\label{sec:arch_plasma}
+
+Auf \cref{fig:sysarch_plasma} ist die Architektur des Plasma-Systems im Ausgangszusatand (Version 2.1) abgebildet. Diese beinhaltet nur einen rudimentären Interrupt-Controller, zwei \glspl{GPIO}, einen Counter sowie einen \gls{UART} Controller. Außerdem ist der interne \gls{RAM} als \gls{FPGA}-interner Block-\gls{RAM} implementiert und der externe \gls{RAM} ungenutzt. Die Verknüpfung zwischen der Plasma-CPU und den Komponenten erfolgt über einen sehr einfachen Multiplexer mit Adressdekoder, dessen Erweiterung sich allerdings als äußerst umständlich erweist. 
+
+\begin{figure}[!htbp]
+	\centering	
+	\begin{tikzpicture}[auto]
+	\node [block] (plasma) {Plasma CPU};
+	\node [block, below = of plasma.south west, anchor=north west, minimum width = \linewidth] (intercon) {MUX};
+	
+	\node [block, below = of intercon.south west, anchor=north west, xshift=1cm] (irq) {IRQ};
+	\node [block, right = of irq] (iram) {Int. RAM};
+	\node [block, below = of iram] (eram) {Ext. RAM};
+	
+	\node [block, right = of iram] (gpios) {GPIO\textsubscript{0..1}};
+	\node [block, below = of gpios] (counters) {CNT\textsubscript{0}};	
+	
+	\node [block, right = of gpios] (uartc) {UART};
+	
+	\draw[->]             (plasma.south) -- (plasma.south |- intercon.north);
+	
+	\draw[<-]             (irq.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south); 
+	
+	\draw[<-]             (iram.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (eram.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\draw[<-]             (gpios.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (counters.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\draw[<-]             (uartc.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\end{tikzpicture}
+	
+	\caption{Blockdiagramm des Plasma im Ausgangszustand}
+	\label{fig:sysarch_plasma}
+\end{figure}
+
+\section{Plasma-SoC auf dem ZedBoard}
+\label{sec:arch_plasma_soc_zedboard}
+
+Die erste Entwicklungsiteration erfolgt für das Digilent ZedBoard. Es werden ein Wishbone-\gls{Interconnect} und die dazugehörigen Wrapper bzw. Adapter entwickelt. 
+Außerdem werden neue Komponenten wie z.B. Zähler, ein Controller für das Display mit der Modellnummer UG-2832HSWEG04 sowie ein \gls{SPI}-Controller eingeführt. Einen Überblick über die neue Systemarchitektur verschafft \cref{fig:sysarch_plasmasoc_zedboard}.
+\begin{figure}[!htbp]
+	\centering	
+	\begin{tikzpicture}[auto]
+	\node [block] (plasma) {Plasma CPU};
+	\node [block, right = of plasma] (arbiter) {Arbiter};
+	\node [block, below = of plasma.south west, anchor=north west, minimum width = \linewidth] (intercon) {Wishbone Intercon};
+	
+	\node [block, below = of intercon.south west, anchor=north west, xshift=1cm] (irc) {IRC};
+	\node [block, right = of irc] (iram) {Int. RAM};
+	\node [block, below = of iram] (eram) {Ext. RAM};
+	
+	\node [block, right = of iram] (gpios) {GPIO\textsubscript{0..3}};
+	\node [block, below = of gpios] (counters) {CNT\textsubscript{0..3}};
+	\node [block, below = of counters] (timers) {TIM\textsubscript{0..3}};
+	
+	\node [block, right = of gpios] (uartc) {UART};
+	\node [block, below = of uartc] (oledc) {Display};
+	\node [block, below = of oledc] (spic) {SPI};
+	
+	\draw[->]             (plasma.east) -- (arbiter.west);
+	
+	\draw[->]             (plasma.south) -- (plasma.south |- intercon.north);
+	\draw[->]             (arbiter.south) -- (arbiter.south |- intercon.north);
+	
+	\draw[<-]             (irc.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south); 
+	
+	\draw[<-]             (iram.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (eram.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\draw[<-]             (gpios.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (counters.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (timers.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\draw[<-]             (oledc.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (uartc.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (spic.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\end{tikzpicture}
+	
+	\caption{Blockdiagramm des Plasma-SoC auf dem ZedBoard}
+	\label{fig:sysarch_plasmasoc_zedboard}
+\end{figure}
+
+\section{Plasma auf dem DE1-SoC-Board}
+\label{sec:arch_plasma_soc_de1_soc}
+
+In der zweiten Iteration wird das vorhandene Plasma-SoC auf das neue Terasic DE1-SoC-Board portiert. Die dabei verfolgte Architektur ist auf \cref{fig:sysarch_plasmasoc_de1_soc} abgebildet.
+Da das Terasic DE1-SoC-Board nicht über ein Display verfügt, wird dieser aus dem Wishbone-Bus und der Adresszuordnung entfernt. Ebenso wird auf die externe \gls{RAM}-Schnittstelle verzichtet. 
+
+\begin{figure}[!htbp]
+	\centering	
+	\begin{tikzpicture}[auto]
+	
+	\node [block] (plasma) {Plasma CPU};
+	\node [block, right = of plasma] (arbiter) {Arbiter};
+	\node [block, below = of plasma.south west, anchor=north west, minimum width = \linewidth] (intercon) {Wishbone Intercon};
+	
+	\node [block, below = of intercon.south west, anchor=north west, xshift=1cm] (irc) {IRC};
+	\node [block, right = of irc] (iram) {Int. RAM};
+	\node [block crossed out, below = of iram] (eram) {Ext. RAM};
+	
+	\node [block, right = of iram] (gpios) {GPIO\textsubscript{0..3}};
+	\node [block, below = of gpios] (counters) {CNT\textsubscript{0..3}};
+	\node [block, below = of counters] (timers) {TIM\textsubscript{0..3}};
+	
+	
+	\node [block, right = of gpios] (uartc) {UART};
+	\node [block crossed out, below = of uartc] (oledc) {Display};
+	\node [block, below = of oledc] (spic) {SPI};
+	
+	\draw[->]             (plasma.east) -- (arbiter.west);
+	
+	\draw[->]             (plasma.south) -- (plasma.south |- intercon.north);
+	\draw[->]             (arbiter.south) -- (arbiter.south |- intercon.north);
+	
+	\draw[<-]             (irc.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south); 
+	
+	\draw[<-]             (iram.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (eram.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\draw[<-]             (gpios.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (counters.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (timers.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\draw[<-]             (oledc.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (uartc.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (spic.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\end{tikzpicture}
+	\caption{Blockdiagramm des Plasma-SoC auf dem DE1-SoC}
+	\label{fig:sysarch_plasmasoc_de1_soc}
+\end{figure}
+
+Die dritte Iteration sieht eine Erweiterung des auf das Terasic DE1-SoC-Board portierten Plasma-SoC vor. In diesem Schritt werden jeweils eine Avalon-Wishbone und eine Wishbone-Avalon Bridge als Master bzw. Slave zum Wishbone-Bus hinzugefügt, wie auf \cref{fig:sysarch_plasmasoc_de1_soc_qsys} dargestellt. Diese Neuerung und die Erstellung eines IP-Core ermöglicht eine Integration in das das im Platform Designer entworfene QSYS-System. 
+
+\begin{figure}[!htbp]
+	\centering	
+	\begin{tikzpicture}[auto]
+	
+	\node [block] (hps) {HPS (ARM CPU)};
+	\node [block, right = of hps] (sysid) {SysID};
+		
+	\node [block, below = 1.5cm of hps.south west, anchor=north west, minimum width = \linewidth] (avalons) {Avalon Bridge (Wishbone Master)};
+	
+	\node [block, below = of avalons.south west, anchor=north west] (plasma) {Plasma CPU};
+	\node [block, right = of plasma] (arbiter) {Arbiter};
+	\node [block, below = of plasma.south west, anchor=north west, minimum width = \linewidth] (intercon) {Wishbone Intercon};
+	
+	\node [block, below = of intercon.south west, anchor=north west, xshift=1cm] (irc) {IRC};
+	\node [block, right = of irc] (iram) {Int. RAM};
+	
+	\node [block, right = of iram] (gpios) {GPIO\textsubscript{0..3}};
+	\node [block, below = of gpios] (counters) {CNT\textsubscript{0..3}};
+	\node [block, below = of counters] (timers) {TIM\textsubscript{0..3}};
+	
+	\node [block, right = of gpios] (uartc) {UART};
+	\node [block, below = of uartc] (spic) {SPI};
+	
+	\node [block, below = 7.5cm of intercon.south east, anchor=north east, minimum width = \linewidth] (avalonm) {Avalon Bridge (Wishbone Slave)};
+	
+	\node [block, below = 1.5cm of avalonm.south west, anchor=north west, xshift=1cm] (eram) {Ext. RAM};
+	\node [block, right = of eram] (hex) {7 segment display};
+	\node [block, right = of hex] (switches) {Schalter};
+	\node [block, right = of switches] (buttons) {Taster};
+	
+	
+	\node[container, fit=(plasma) (intercon) (avalons) (avalonm)] (plasmasoc) {};
+	\node at (plasmasoc.north west) [above right] {Plasma SoC};
+	
+	\draw[->]             (plasma.east) -- (arbiter.west);
+	\draw[<-]             (arbiter.east) -- ++(5mm, 0) -- (\currentcoordinate |- avalons.south); 
+	
+	\draw[->]             (hps.south) -- (hps.south |- avalons.north);
+	\draw[->]             (hps.east) -- (sysid.west);
+	
+	\draw[->]             (avalons.355) -- (intercon.5);
+	
+	\draw[->]             (plasma.south) -- (plasma.south |- intercon.north);
+	\draw[->]             (arbiter.south) -- (arbiter.south |- intercon.north);
+	
+	\draw[<-]             (irc.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south); 
+	
+	\draw[<-]             (iram.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\draw[<-]             (gpios.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (counters.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (timers.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\draw[<-]             (uartc.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	\draw[<-]             (spic.west) -- ++(-5mm, 0) -- (\currentcoordinate |- intercon.south);
+	
+	\draw[->]             (intercon.355) -- (avalonm.5);	
+	
+	\draw[<-]             (eram.west) -- ++(-5mm, 0) -- (\currentcoordinate |- avalonm.south); 
+	\draw[<-]             (hex.west) -- ++(-5mm, 0) -- (\currentcoordinate |- avalonm.south); 
+	\draw[<-]             (switches.west) -- ++(-5mm, 0) -- (\currentcoordinate |- avalonm.south); 
+	\draw[<-]             (buttons.west) -- ++(-5mm, 0) -- (\currentcoordinate |- avalonm.south); 
+	
+	\end{tikzpicture}
+	\caption{Blockdiagramm des Plasma-SoC auf dem DE1-SoC mit Verbindung zu weiteren IP-Cores und ARM Prozessor über den Avalon-Bus}
+	\label{fig:sysarch_plasmasoc_de1_soc_qsys}
+\end{figure}

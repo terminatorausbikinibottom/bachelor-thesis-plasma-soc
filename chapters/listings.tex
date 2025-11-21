@@ -1,0 +1,16 @@
+\chapter{Quelltexte}
+
+
+\TeXOSQueryWalk{\vhdlfiles}{,}{.*\string\.vhd}{attachments/Plasma-Soc/}
+
+\makeatletter
+\ifx\vhdlfiles\empty
+Query Failed!
+\else
+	\foreach \vhd in  \vhdlfiles {
+		
+		\inputminted[autogobble, breaklines=true]{VHDL}{attachments/Plasma-Soc/\vhd}
+		\captionof{listing}{\textsf{\vhd} \label{lst:\vhd}}
+	}
+\fi
+\makeatother

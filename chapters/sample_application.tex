@@ -1,0 +1,130 @@
+\chapter{Beispielanwendung}
+\label{cha:sample_application}
+
+Das Beispielprogramm greift auf fast alle von der Firmware bereitgestellten Funktionen zu. Der LED-Streifen auf dem Zedboard wird als Lauflicht angesteuert, auf dem Display werden die Zeit seit dem Start (Reset), der aktuelle LED Zustand und auch eine benutzerdefinierte Eingabe über UART dargestellt.
+Verwendet werden drei Zähler (konfiguriert als Timer), ein Timer, UART, das Display-Modul, sowie die dateibasierte Ausgabe, dynamische Speicherallokation und Stringmanipulation.
+\section{Initialisierung}
+
+\subsection{Interrupts}
+
+Zunächst werden alle relevanten Interrupt-Handler registriert und anschließend das Interrupt-System aktiviert. Dieser Schritt ist in \cref{lst:sample_setup_interrupts} beschrieben.
+
+\begin{code}
+	\inputminted[autogobble, firstline=43, lastline=53, firstnumber=43]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{Interrupt Setup}
+	\label{lst:sample_setup_interrupts}
+\end{code}
+
+\subsection{UART}
+Im nächsten Schritt, in \cref{lst:sample_setup_uart} umgesetzt, wird eine UART-Device-Datei geöffnet, mit Schreib- und Lese Rechten und das UART-Device aktiviert. 
+
+\begin{code}
+	\inputminted[autogobble, firstline=55, lastline=59, firstnumber=55]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{UART Setup}
+	\label{lst:sample_setup_uart}
+\end{code}
+
+\subsection{Display}
+Anschließend wird die Display-Datei im Schreibmodus geöffnet und aktiviert. Danach wird der Textmodus gesetzt und der Displayinhalt geleert und auf Abschluss der Operation gewartet. Diese Schritte sind in \cref{lst:sample_setup_display} implementiert.
+
+\begin{code}
+	\inputminted[autogobble, firstline=61, lastline=68, firstnumber=61]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{Display Setup}
+	\label{lst:sample_setup_display}
+\end{code}
+
+\subsection{Zähler}
+In \cref{lst:sample_setup_counter} werden drei von vier Zählern als Timer mit jeweils 25, 125 und 10ms Takt konfiguriert und aktiviert.
+
+\begin{code}
+	\inputminted[autogobble, firstline=70, lastline=81, firstnumber=70]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{Zähler Setup}
+	\label{lst:sample_setup_counter}
+\end{code}
+
+\subsection{Timer}
+Zuguterletzt wird in \cref{lst:sample_setup_timer} ein von vier Timern mit 1s Takt konfiguriert und aktiviert.
+
+\begin{code}	
+	\inputminted[autogobble, firstline=83, lastline=87, firstnumber=83]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{Timer Setup}
+	\label{lst:sample_setup_timer}
+\end{code}
+
+\section{Interrupt-Handler}
+
+\subsection{UART-Eingabe}
+\label{cha:sample_uart_input_handler}
+
+Mit dieser Routine wird die Funktionsfähigkeit der UART-Komponente, der Firmware, sowie des Interrupt-Controllers überprüft. Die Schwierigkeit hierbei bestand darin, dass die globale \gls{ISR} nicht in der Lage war, Interrupts, die dauerhaft auf logisch 1 blieben, zu verarbeiten. Dies wurde, wie in \cref{cha:irc_global_isr} beschrieben, behoben.
+
+In \cref{lst:sample_uart_input_handler} ist die Umsetzung der UART-\gls{ISR} dargestellt. Aus dem Datenregister des UART-Controllers wird ein Zeichen ausgelesen und falls die Grenzen des Puffers nicht überschritten sind, sofort an den Absender zurückgeschrieben (UART-Mirror).
+Nach dem Bound-Check erfolgt die Behandlung der \textit{Backspace} und \textit{Delete}-ASCII-Codes. Beim Entfernen des Textes wird der Puffer-Cursor dekrementiert und es wird ein Leerzeichen geschrieben. Alle anderen Zeichen werden ungefiltert in den Puffer geschrieben.
+
+\begin{code}
+	\inputminted[autogobble, firstline=97, lastline=120, firstnumber=97]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{UART-Eingabe}
+	\label{lst:sample_uart_input_handler}
+\end{code}
+
+\subsection{Uhr}
+
+Da auf einem Zähler aufbauende Timer umgesetzt wurden, liegt es nahe, eine Uhr umzusetzen, die die vergangene Zeit seit dem Systemstart bzw. Reset misst. 
+Die an einer Digitaluhr angelehnte Ausgabe wird in \cref{lst:sample_clock} realisiert. Die entsprechende \gls{ISR} ist an Timer0 angebunden und wird jede Sekunde einmal aufgerufen. Zunächst werden die gezählten Sekunden in Stunden, Minuten und Sekunden im Sexagesimalsystem umgewandelt. Danach erfolgt die Umwandlung in eine Zeichenkette. Da die stdlib-\texttt{printf}-Funktion sehr umfangreich ist \footnote{\url{https://sourceware.org/git/?p=glibc.git;a=blob;f=stdio-common/vfprintf.c;h=fc370e8cbc4e9652a2ed377b1c6f2324f15b1bf9;hb=3321010338384ecdc6633a8b032bb0ed6aa9b19a}} und mit allen weiteren Modulen den kleinen Arbeitsspeicher von 8KB bei Weitem sprengen würde, wurde auf eine Aufnahme in die Firmware verzichtet. Stattdessen wird die Zeichenkettenvorlage manuell befüllt. 
+
+\begin{code}
+	\inputminted[autogobble, firstline=122, lastline=151, firstnumber=122]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{Uhranzeige}
+	\label{lst:sample_clock}
+\end{code}
+
+\subsection{Display-Refresh}
+
+Um die Funktionsfähigkeit des entwickelten Display-Controllers und -Treibers zu überprüfen, werden sämtliche zur Laufzeit ermittelten Daten ausgegeben.
+Das Display wird jede \SI{25}{\milli\second} (äquivalent zu \SI{40}{\hertz}) neu beschrieben. Das ist über die entsprechende \gls{ISR} an Counter0 konfiguriert. Sofern der Display-Controller Daten akzeptiert, werden die Uhrzeit, der aktuelle LED-Status sowie eine über UART erfolgende Benutzereingabe dargestellt. Die Umsetzung ist in \cref{lst:sample_display_flush} abgebildet.
+
+\begin{code}
+	\inputminted[autogobble, firstline=153, lastline=169, firstnumber=153]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{Display-Refresh}
+	\label{lst:sample_display_flush}
+\end{code}
+
+\subsection{UART-Ausgabe}
+
+In \cref{lst:sample_uart_output} ist die Übertragung der in \cref{cha:sample_uart_input_handler} gepufferten Benutzereingabe an den Host dargestellt. Diese Routine wird jede \SI{10}{\milli\second} aufgerufen, da die entsprechende \gls{ISR} an Counter2 angebunden ist.
+
+\begin{code}
+	\inputminted[autogobble, firstline=171, lastline=174, firstnumber=171]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{UART Ausgabe}
+	\label{lst:sample_uart_output}
+\end{code}
+
+\subsection{LED-Lauflicht}
+
+Das Lauflicht dient zur Funktionsdemonstration des Interrupt-Controllers, GPIO- und Zähler-Komponente. Jede \SI{250}{\milli\second} wird linksseitig die jeweils nächste LED aktiviert. 
+\begin{code}
+	\inputminted[autogobble, firstline=176, lastline=193, firstnumber=176]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{LED Lauflicht}
+	\label{lst:sample_led_band}
+\end{code}
+
+\subsection{Busfehler}
+
+Der Busfehler ist ein Speicher/Buszugriffsfehler (Adresse außerhalb des gültigen Bereiches) und wird mit der in \cref{lst:sample_access_violation} dargestellten Funktion behandelt, indem die Zeichenfolge \enquote{ACCESS VIOLATION!} über \gls{UART} an den verbundenen Rechner gesendet wird. 
+Bei der Entwicklung der \gls{UART}-Eingabe wurde ein Buffer-Underflow-Fehler entdeckt, wodurch die Funktionsfähigkeit des Busfehler-Interrupts und Handlers belegt wurde. 
+Dieses Verhalten lässt sich folgenderweise provozieren:
+
+\begin{easylist}[enumerate]
+	& Host-Rechner mit dem ZedBoard verbinden (Siehe \cref{app:zedboard_setup})
+	& ZedBoard mit der Datei \textit{plasma\_soc\_top\_with\_underflow\_bug.bit} programmieren (Siehe \cref{app:zedboard_program})
+	& Serielle Sitzung für die \gls{UART}-Schnittstelle starten (Siehe \cref{app:serial_comm})
+	& Text eingeben (Dieser sollte dann auf dem Bildschirm ausgegeben werden)
+	& Die Rücktaste gedrückt halten. Der Display-Inhalt wird sich verändern und in der seriellen Sitzung wird \enquote{ACCESS VIOLATION!} ausgegeben. 
+	& Das ZedBoard muss neu programmiert werden, da der Arbeitsspeicherinhalt unwiederbringlich zerstört wurde.
+\end{easylist}
+
+\begin{code}
+	\inputminted[autogobble, firstline=195, lastline=198, firstnumber=195]{C}{attachments/Plasma-SoC/sw/examples/src/sample.c}
+	\caption{Speicherzugriffsfehler}
+	\label{lst:sample_access_violation}
+\end{code}

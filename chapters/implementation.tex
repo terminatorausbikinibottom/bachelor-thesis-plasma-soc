@@ -1,0 +1,1617 @@
+\chapter{Umsetzung}
+\label{cha:implementation}
+
+In diesem Kapitel wird auf die Umsetzungsdetails der Hardware- und Softwareentwicklung, sowie der Systemeinrichtung eingegangen. 
+
+Im \cref{sec:impl_wishbone} werden wesentliche Etappen der Entwicklung des Wisbone-\gls{Interconnect}, neuer Module und Wrapper für bereits vorhandene Komponenten geschildert, um nachvolgende Erweiterungen besser nachvollziehen zu können.
+
+Die Entwicklung der Firmware für das Plasma-\gls{SoC} wird in \cref{sec:plasma_fw} umrissen.
+
+Auf die Portierung des im \cref{sec:impl_wishbone} geschilderten \gls{SoC} auf das in dieser Bachelorarbeit verwendete DE1-SoC Board wird in \cref{sec:impl_port_hw_to_de1_soc} eingegangen. 
+
+Im \cref{sec:impl_extend_hw_for_de1_soc} wird das System aus \cref{sec:impl_port_hw_to_de1_soc} um zusätzliche Hardware-Komponenten erweitert, sodass der externe, \SI{64}{\mega\byte} umfassende, \gls{RAM}  und auch die \gls{ARM}-\gls{CPU} verwendet werden können. 
+
+Im \cref{sec:impl_extend_tools_for_de1_soc} wird die Erweiterung der Hilfssoftware geschildert.
+
+Die Portierung der Plasma-Firmware und der Plasma-Beispielanwendung auf das DE1-SoC wird im \cref{sec:impl_port_plasma_sw_to_de1_soc} geschildert.
+
+Der \cref{sec:impl_setup_linuxfor_de1_soc} beschreibt die Einrichtung eines Linux-Betriebssystems auf dem DE1-SoC Board und der dafür notwendigen Schritte. 
+
+Im \cref{sec:impl_develop_linux_sw_for_de1_soc} wird die Entwicklung der Linux Anwendungen, welche mit auf dem \gls{HPS} ausgeführt werden und Zugriff auf das Plasma-\gls{SoC} haben, beschrieben.
+
+Im \cref{sec:impl_develop_linux_drivers_for_de1_soc} wird die Entwicklung der Linux Treiber, welche einen alternativen Zugriff auf das Plasma-Soc erlauben, beschrieben.
+\section{Entwicklung des Wishbone-basierten Systems}
+\label{sec:impl_wishbone}
+
+Im Ausgangssystem stehen alle Komponenten durch manuelle Adressdekodierung und Datenmultiplex dem Plasma zur Verfügung. Jegliche Erweiterung erforderte mehrere Eingriffe und Komponenten mit mehreren Kontroll- und Datenregistern waren nur sehr schwer einzubinden. 
+
+Es wird ein Shared-Bus (vgl. \cref{fig:shared_bus_intercon}) gemäß der Wishbone-Spezifikation \cites[21]{website:wishbone_b4_spec} entwickelt. Als Entwicklungsgrundlage dient das \enquote{boschmitt/wishbone}\cite{website:boschmitt_wishbone} Projekt. 
+
+Sollte eine Adresse außerhalb des gültigen Bereiches angesprochen werden, so signalisiert der Bus einen Busfehler. Ein Fehler wird ebenfalls signalisiert, wenn eine korrekt ausgewählte Komponente innerhalb ihrer eigenen Adressdekodierung eine Zugriffsverletzung feststellt. Um einen Busfehler an den Kernel weiterzugeben, wird der Interrupt 31 verwendet (vgl. \cref{tab:interrupts}).
+
+Die Adressbereiche, welche bei der partiellen Adressdekodierung verwendet werden, sind in \cref{tab:wb_plasma_zedboard_address_map} aufgelistet.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{| l | r | r |}
+		\hline	
+		\textbf{Gerät} & \textbf{Startadresse} & \textbf{Adressbereich} \\
+		\hline		
+		Interner \gls{RAM} & \texttt{0x00000000} & \texttt{0x0FFFFFFF} \\
+		Externer \gls{RAM} & \texttt{0x10000000} & \texttt{0x001FFFFF} \\
+		\hline		
+		IRC\textsubscript{0} & \texttt{0x20000000} & \texttt{0x1F} \\
+		\hline		
+		UART\textsubscript{0}& \texttt{0x20000100} & \texttt{0x0F} \\
+		\hline
+		\multirow{4}{*}{Timer\textsubscript{0:3}} & \texttt{0x20000200} & \texttt{0x0F} \\
+		& \texttt{0x20000210} & \texttt{0x0F} \\
+		& \texttt{0x20000220} & \texttt{0x0F} \\
+		& \texttt{0x20000230} & \texttt{0x0F} \\
+		\hline
+		\multirow{4}{*}{Zähler\textsubscript{0:3}} & \texttt{0x20000300} & \texttt{0x0F} \\
+		& \texttt{0x20000310} & \texttt{0x0F} \\
+		& \texttt{0x20000320} & \texttt{0x0F} \\
+		& \texttt{0x20000330} & \texttt{0x0F} \\
+		\hline
+		\multirow{4}{*}{GPIO\textsubscript{0:3}}  & \texttt{0x20000400} & \texttt{0x0F} \\
+		& \texttt{0x20000410} & \texttt{0x0F} \\
+		& \texttt{0x20000420} & \texttt{0x0F} \\
+		& \texttt{0x20000430} & \texttt{0x0F} \\
+		\hline
+		SPI\textsubscript{0} & \texttt{0x20000500} & \texttt{0x0F} \\
+		\hline
+		Display & \texttt{0x40000000} & \texttt{0x7F} \\
+		\hline
+	\end{tabular}
+	
+	\caption{Adresszuordnung}
+	\label{tab:wb_plasma_zedboard_address_map}
+\end{table}
+
+Um destruktive Änderungen an bereits vorhandenen Komponenten, wie der Plasma-CPU, \gls{RAM}, \gls{UART}, etc. zu vermeiden, werden Wishbone-Wrapper als zusätzliche Entitäten entwickelt. Dieses Entwurfsmuster wird auch für neue Module verwendet, da sie zum Teil auch als Untermodule in anderen Komponenten verwendet werden. Zu den neu eingeführten Komponenten gehören der Interrupt-Controller, Zähler, Timer, \gls{GPIO}-, \gls{UART}-, \gls{SPI}-Schnittstellen sowie der Display-Controller.
+
+Es wird ein einheitliches Register-Schema für alle Komponenten entworfen (siehe \cref{tab:device_reg_map}). An den unteren drei Adressen liegen nacheinander das Kontroll-, Status- und Datenregister. Die jeweils unteren beiden Bits sind für \gls{CSR} reserviert. 
+
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | r | l | c | c | c | c |}
+		\hline
+		\textbf{Offset} & \textbf{Register} & \textbf{R/W} & \textbf{31 .. 2} & \textbf{1} & \textbf{0} \\
+		\hline
+		0x00 & control & r/w & user defined & enable & reset \\
+		\hline
+		0x04 & status &  r & user defined & data available & ready\\
+		\hline
+		0x08 & data & r/w & \multicolumn{3}{c|}{data} \\
+		\hline
+		\multicolumn{1}{|c|}{\vdots} & \vdots & \vdots & \multicolumn{3}{c|}{\vdots} \\
+		\hline
+	\end{tabular}
+	
+	\caption{Allgemeine Register-Map}
+	\label{tab:device_reg_map}
+\end{table}
+
+Der Plasma Prozessor wird an das Wishbone-Interface angepasst. Dazu wird ein Wishbone-Master-Wrapper entwickelt. Dieser kontrolliert die \textit{cyc} und \textit{stb} Ausgangssignale, und reagiert auf \textit{ack}, \textit{stall}, \textit{err}, \textit{rty} Signale. 
+
+Der interne \gls{RAM} wird an den Wishbone Bus angebunden. Der entsprechende Wrapper ist im Vergleich zu anderen Devices sehr einfach, da das in \cref{tab:device_reg_map} beschriebene Schema hier nicht befolgt werden muss und die Daten ohne weitere Adressdekodierung am Bus anliegen.
+
+Der Interrupt Controller wird aus P. Tofahrns Abschlussprojekt \cite{article:plasma_interrupt_controller} übernommen und angepasst. Für diesen wird ein Wishbone-Wrapper entwickelt. Zusätzlich waren Änderungen an der Plasma-CPU notwendig, da die CPU \textquote{bei einem Reset an Adresse 0 und bei einem Interrupt an 0x3C} \cite[5]{article:plasma_interrupt_controller} sprang.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | r | l | c | c | c | c |}
+		\hline
+		\textbf{Offset} & \textbf{Register} & \textbf{R/W} & \textbf{31 .. 2} & \textbf{1} & \textbf{0} \\
+		\hline
+		0x00 & control & r/w & & enable & reset \\
+		\hline
+		0x04 & status &  r &  \multicolumn{3}{c|}{unused} \\
+		\hline
+		0x08 & data & r/w & \multicolumn{3}{c|}{data} \\
+		\hline
+		0x0C & imm flags &  r & \multicolumn{3}{c|}{immediate interrupt flag state} \\	
+		\hline
+		0x10 & clear & r/w & \multicolumn{3}{c|}{clear interrupt flag} \\
+		\hline
+	    0x14 & invert & r/w &  \multicolumn{3}{c|}{polarity}\\
+	    \hline
+		0x18 & mask & r/w & \multicolumn{3}{c|}{interrupt mask} \\
+		\hline
+		0x1C & edge & r/w &  \multicolumn{3}{c|}{edge detection} \\
+		\hline
+	\end{tabular}
+	
+	\caption{Interrupt Controller Register-Map}
+	\label{tab:ir_contrroller_reg_map}
+\end{table}
+
+Für sämtliche Komponenten werden Interrupts definiert. Da der neue Interrupt-Controller mit 32 Kanälen parametrisiert ist, können 32 verschiedene \glspl{IRQ} definiert werden. Diese sind in \cref{tab:interrupts} aufgelistet. Dabei sind die \glspl{IRQ} 30 bis 15 nicht zugeordnet und für künftige Erweiterungen gedacht.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | c | c | c | c | c | c | c | c }
+		\textbf{\gls{IRQ}} & 31 & 30:15 & 14 & 13:10 & 9:6 & 5:2 & 1 & 0 \\
+		\hline
+		& Busfehler & $\emptyset$ & Display & GPIO\textsubscript{3:0} & Zähler\textsubscript{3:0} & Timer\textsubscript{3:0} & UART\textsubscript{w} & UART\textsubscript{r} \\
+		\hline
+	\end{tabular}
+	
+	\caption{\glspl{IRQ}}
+	\label{tab:interrupts}
+\end{table}
+
+Ein neuer Zähler mit neuen Features wird entwickelt. Bei diesem sind die Zählerrichtung, Reload-Wert sowie der Auto-Reload zur Laufzeit konfigurierbar. Bei Erreichen eines Grenzwertes (Aufwärts: reload - 1, Abwärts: 0) wird ein Interrupt ausgelöst. Die Register-Map ist in \cref{tab:counter_reg_map} dargestellt.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | r | l | c | c | c | c | c | c |}
+		\hline
+		\textbf{Offset} & \textbf{Register} & \textbf{R/W} & \textbf{31 .. 4} & \textbf{3} & \textbf{2} & \textbf{1} & \textbf{0} \\
+		\hline
+		0x00 & control & r/w & & autoreload & direction & enable & reset \\
+		\hline
+		0x04 & status & r & \multicolumn{3}{c|}{} & overflow & ready \\
+		\hline
+		0x08 & data & r & \multicolumn{5}{c|}{current counter value} \\
+		\hline
+		0x0C & reload & r/w & \multicolumn{5}{c|}{reload value} \\
+		\hline
+	\end{tabular}
+	
+	\caption{Zähler Register-Map}
+	\label{tab:counter_reg_map}
+\end{table}
+
+Die Timer-Komponente baut auf dem obengenannten Zähler auf und erbt dessen wesentlichen Eigenschaften. Der Reload-Wert wird intern - abhängig von der konfigurierten Zeiteinheit - modifiziert.
+Bei Erreichen des Schwellwertes wird analog zum Zähler ein Interrupt ausgelöst. 
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | r | l | c | c | c | c | c | c |}
+		\hline
+		\textbf{Offset} & \textbf{Register} & \textbf{R/W} & \textbf{31 .. 6} & \textbf{5:3} & \textbf{2} & \textbf{1} & \textbf{0} \\
+		\hline
+		0x00 & control & r/w & & unit \hyperref[notes:timer_reg_map]{(1)} & autoreload & enable & reset \\
+		\hline
+		0x04 & status & r & \multicolumn{3}{c|}{} & overflow & ready \\
+		\hline
+		0x08 & data & r & \multicolumn{5}{c|}{current timer value} \\
+		\hline
+		0x0C & reload & r/w & \multicolumn{5}{c|}{reload value} \\
+		\hline
+		\multicolumn{8}{| l |}{\textbf{Anmerkungen:}\label{notes:timer_reg_map} } \\
+		\multicolumn{8}{| l |}{1. Erlaubte Zeiteinheiten sind aus \cref{tab:timer_units} zu entnehmen } \\
+		\hline
+	\end{tabular}
+	
+	\caption{Timer Register-Map}
+	\label{tab:timer_reg_map}
+\end{table}
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | l | r | l | }
+		\hline
+		\textbf{Einheit} & \textbf{Code} & \textbf{Reload-Wert} \\
+		\hline
+		\SI{1}{\tick}  & 0 & $1$  \\
+		\hline
+		\SI{1}{\nano\second} & 1 & $ 50 * 10^{-3} $ \\
+		\hline
+		\SI{1}{\micro\second} & 2 & $ 50 * 10^0 $  \\
+		\hline
+		\SI{1}{\milli\second} & 3 & $ 50 * 10^3 $  \\
+		\hline
+		\SI{1}{\second} & 4 & $ 50 * 10^6 $  \\
+		\hline
+	\end{tabular}
+	
+	\caption{Timer Zeiteinheiten Kodierung und Reloadwert [ticks]}
+	\label{tab:timer_units}
+\end{table}
+
+Für den bereits im Plasma-System vorhandenen \gls{UART}-Controller wird ein Wishbone-Wrapper entwickelt. Die zugrundeliegende Komponente wird fest für eine Systemfrequenz von \SI{50}{\mega\hertz} konfiguriert, sodass eine Kommunikation mit \SI{57600}{\baud} erfolgen kann.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | r | l | c | c | c | c | c | c |}
+		\hline
+		\textbf{Offset} & \textbf{Register} & \textbf{R/W} & \textbf{31 .. 2} & \textbf{1} & \textbf{0} \\
+		\hline
+		0x00 & control & r/w & & enable & reset \\
+		\hline
+		0x04 & status & r & & data available & ready \\
+		\hline
+		0x08 & data & r/w & \multicolumn{3}{c|}{data} \\
+		\hline
+	\end{tabular}
+	
+	\caption{UART-Controller Register-Map}
+	\label{tab:uart_reg_map}
+\end{table}
+
+Um Peripherie über \gls{GPIO} ansteuern zu können, wird ein rudimentärer \gls{GPIO}-Controller entwickelt. Dieser unterstützt einfache Ausgaben; die Eingaben sind jedoch über eine konfigurierbare Maske maskiert, sodass nur bei bestimmten Pins ein Interrupt ausgelöst wird. 
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | r | l | c | c | c | c | c | c |}
+		\hline
+		\textbf{Offset} & \textbf{Register} & \textbf{R/W} & \textbf{31 .. 2} & \textbf{1} & \textbf{0} \\
+		\hline
+		0x00 & control & r/w & & enable & reset \\
+		\hline
+		0x04 & status & r & & data available & ready \\
+		\hline
+		0x08 & data & r/w & \multicolumn{3}{c|}{data} \\
+		\hline
+		0x0C & mask & r/w & \multicolumn{3}{c|}{mask} \\
+		\hline
+	\end{tabular}
+	
+	\caption{GPIO-Controller Register-Map}
+	\label{tab:gpio_reg_map}
+\end{table}
+
+Basierend auf den SPI Controllern aus den \textquote{ZedBoard OLED Display} \cite{website:zedboard_oled} und \textquote{NexysVideo/GPIO} \cite{website:digilent_nexys_video} Projekten wird ein generischer SPI-Master entwickelt. Konfigurierbar sind die Anzahl Slaves, Datenwortbreite, System- und SPI-Frequenz. Aus der System- und SPI-Frequenz wird der Faktor für den Frequenzteiler gewonnen.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | r | l | c | c | c | c |}
+		\hline
+		\textbf{Offset} & \textbf{Register} & \textbf{R/W} & \textbf{31 .. 2} & \textbf{1} & \textbf{0} \\
+		\hline
+		0x00 & control & r/w & & enable & reset \\
+		\hline
+		0x04 & status & r & & overflow & ready \\
+		\hline
+		0x08 & data & r/w & \multicolumn{3}{c|}{data} \\
+		\hline
+		0x0C & address & r/w & \multicolumn{3}{c|}{SPI slave address} \\
+		\hline
+	\end{tabular}
+	
+	\caption{SPI Controller Register-Map}
+	\label{tab:spic_reg_map}
+\end{table}
+
+Aufbauend auf Michael Mattioli's Projekt \textquote{ZedBoard OLED Display} \cite{website:zedboard_oled} wird der Display-Controller entwickelt. Der Display-Controller unterstützt derzeit nur den Textmodus, d.h der Inhalt des VRAM wird als ASCII-Zeichen interpretiert. Weitere Details sind der Registerzuordnung in \cref{tab:oled_controller_reg_map} zu entnehmen.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | r | l | c | c | c | c | c | c | c | c | c | c |}
+		\hline
+		\textbf{Offset} & \textbf{Register} & \textbf{R/W} & \textbf{31 .. 6} & \textbf{5} & \textbf{4} & \textbf{3} & \textbf{2} & \textbf{1} & \textbf{0} \\
+		\hline
+		0x00 & control & r/w & & clear & flush & text & imm & enable & reset \\
+		\hline
+		0x04 & status & r & \multicolumn{6}{c|}{}& ready \\
+		\hline
+		0x08:0x208 & data & w & \multicolumn{7}{c|}{data} \\
+		\hline
+	\end{tabular}
+	
+	\caption{Display-Controller Register-Map}
+	\label{tab:oled_controller_reg_map}
+\end{table}
+
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | r | l | l | }
+		\hline
+		\textbf{Bit} & \textbf{Name} & \textbf{Beschreibung} \\
+		\hline
+		0 & reset & Setzt das Display zurück \\
+		\hline
+		1 & enable & Aktiviert das Display\\
+		\hline
+		2 & imm & Datenregister wird als Display-Commandos interpretiert \\
+		\hline
+		3 & text & VRAM wird als ASCII-Zeichen interpretiert \\
+		\hline
+		4 & flush & Schreibt das VRAM an das Display \\
+		\hline
+		5 & clear & Leert den VRAM \\
+		\hline
+	\end{tabular}
+	
+	\caption{Control Register Bits}
+	\label{tab:oled_controller_control_reg_bits}
+\end{table}
+
+\section{Entwicklung der Plasma-Firmware}
+\label{sec:plasma_fw}
+%\epigraph{Solltest du jemals ein Betriebssystem entwickeln, nenne es doch KebabOS - so wie unser KebabJS-Framework.}{Öner Caniperk}
+
+Zur Inbetriebnahme des Plasma-\gls{SoC} benötigt man eine \gls{Firmware}. Die neu entwickelten Geräte erfordern Treiber, um von der Software angesteuert werden zu können. 
+
+\subsection{Treiber}
+
+Die entwickelten Treiber bauen auf memory-mapped Strukturen auf. Dies hat den Vorteil, dass man nicht jede einzelne Speicher- bzw. Geräteadresse über eine Basisadresse+Offset ansprechen muss. Es reicht, die Basisadresse der Struktur zu setzen und die Strukturfelder werden vom Compiler automatisch auf inkrementierte Adressen abgebildet.
+Es wird eine Übereinstimmung der verwendeten Datenwortbreite und Reihenfolge zur Definition in \cref{tab:device_reg_map} vorausgesetzt.
+
+\begin{minted}{C}
+typedef struct
+{
+	reg32_t control;
+	reg32_t status;
+	reg32_t data;
+} volatile device_t;
+\end{minted}
+
+Es wäre hilfreich, zur Laufzeit erkennen zu können, welches Gerät angesprochen wird. Dafür wurde ein Gerätedeskriptor entwickelt, welcher eine Gerätestruktur aufnehmen kann und mit einer Gerätetypkennung versieht. Die aktuell unterstützen Geräte sind:
+\begin{easylist}
+	& Zähler
+	& Timer
+	& Interrupt Controller
+	& GPIO Port
+	& UART Controller
+	& SPI Controller
+	& Display Controller
+	& Dateisystem
+	& Unbekanntes Gerät (Standard-Wert)
+\end{easylist}
+
+Zusätzlich zu den Strukturen, welche Geräte-Register abbilden, wurden allgemeine Funktionen entwickelt, die eine Arbeit mit allen kompatiblen Geräten vereinfachen. Die umgesetzten Funktionen sind in \cref{tab:drv_generic_func} aufgelistet. 
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l }
+		\textbf{Kernfunktion} & \textbf{Beschreibung} \\
+		\hline				
+		\texttt{kd\_await\_ready} & \multirow{2}{*}{\parbox{0.5\linewidth}{Blockierendes Warten auf Bereitschaft oder Daten}} \\
+		\texttt{kd\_await\_data}  \\
+		\hline
+		\texttt{kd\_reset} & \multirow{3}{*}{\parbox{0.5\linewidth}{Gerät zurücksetzen, aktivieren und deaktivieren}} \\
+		\texttt{kd\_enable}  \\
+		\texttt{kd\_disable} \\
+		\hline
+		\texttt{kdd\_read} & \multirow{2}{*}{\parbox{0.5\linewidth}{Datenregister des Geräts auslesen und beschreiben}} \\
+		\texttt{kdd\_write} \\
+		\hline
+		\texttt{kdc\_read} & \multirow{5}{*}{\parbox{0.5\linewidth}{Kontrollregister des Geräts gänzlich oder über Bitmaske auslesen und beschreiben}} \\
+		\texttt{kdc\_test} \\
+		\texttt{kdc\_write} \\
+		\texttt{kdc\_set} \\
+		\texttt{kdc\_unset} \\
+		\hline
+		\texttt{kds\_read} & \multirow{2}{*}{\parbox{0.5\linewidth}{Statusregister des Geräts gänzlich oder über Bitmaske auslesen}} \\
+		\texttt{kds\_write} \\
+		\hline
+	\end{tabular}
+	
+	\caption{Allgemeine Treiberfunktionen}
+	\label{tab:drv_generic_func}
+\end{table}
+
+Die Funktionen des \gls{UART}-Treibers werden durch Aufrufe der in \cref{tab:drv_uart_func} aufgelisteten Funktionen umgesetzt.
+
+Der Lese- bzw. Schreibzugriff ist auch über eine über eine \gls{UART}-Datei möglich. Diese kann man über \mintinline{C}{FILE* uf = fopen("dev/uart0", /*modus*/);} öffnen.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l | l}
+		\textbf{Funktion} & \textbf{Beschreibung} & \textbf{Kernfunktion} \\
+		\hline		
+		\texttt{uart\_reset} & UART zurücksetzen & \texttt{kd\_reset} \\
+		\texttt{uart\_enable} & UART aktivieren & \texttt{kd\_enable} \\
+		\texttt{uart\_disable} & UART deaktivieren & \texttt{kd\_disable}\\
+		\texttt{uart\_read} & UART-Datenregister auslesen & \texttt{kdd\_read}\\
+		\texttt{uart\_write} & UART-Datenregister beschreiben & \texttt{kdd\_write}\\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Display-Controllers}
+	\label{tab:drv_uart_func}
+\end{table}
+
+Der Timer wird ebenfalls über einen Treiber konfiguriert. Ein Möglichkeit, die Zeiteihneit zu setzen (\SI{}{\tick}, \SI{}{\nano\second}, \SI{}{\micro\second}, \SI{}{\milli\second}, \SI{}{\second}) ist gegeben. Der Timer kann als selbstzurücksetzend konfiguriert werden, das heißt dass er kontinuierlich weiterzählt und bei jedem Erreichen des Schwellwertes einen Interrupt setzt und wieder beim Initialwert beginnt. Die Treiberfunktionen sind in \cref{tab:drv_timer_func} aufgelistet.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l }
+		\textbf{Funktion} & \textbf{Beschreibung} \\
+		\hline		
+		\texttt{timer\_set\_reload} & Neuen Zählwert setzen \\
+		\texttt{timer\_set\_unit} & Zeiteinheit setzen \\
+		\texttt{timer\_set\_autoreset} & Timer automatisch zurücksetzen \\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Timers}
+	\label{tab:drv_timer_func}
+\end{table}
+
+Mithilfe des Zählertreibers wird die Konfiguration vereinfacht. Es werden Strukturen und Funktionen eingeführt, um einen neuen Schwellwert zu setzen, den Zähler zurückzusetzen und zu aktivieren. Im Gegensatz zu anderen Geräten, dürfen hier nicht die generischen \texttt{kd\_enable} und \texttt{kd\_reset} Funktionen zum Aktivieren bzw. Zurücksetzen des Zählers verwendet werden, da der Schwellwert abhängig von der Zählrichtung zurückgesetzt wird und es zu undefiniertem Laufzeitverhalten kommen kann.
+Die Treiberfunktionen sind in \cref{tab:drv_counter_func} aufgelistet.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l }
+		\textbf{Funktion} & \textbf{Beschreibung} \\
+		\hline
+		\texttt{counter\_set\_reload} & Neuen Zählwert setzen \\
+		\texttt{counter\_reset} & Zähler zurücksetzen \\
+		\texttt{counter\_enable} & Zähler aktivieren \\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Zählers}
+	\label{tab:drv_counter_func}
+\end{table}
+
+Für den Display-Controller werden in \cref{tab:drv_display_func} aufgelistete Funktionen umgesetzt. Der Zugriff auf den Videopuffer erfolgt über die Dateisystem-Abstraktionsschicht (empfohlen) über  \mintinline{C}{FILE* df = fopen("dev/display0", /*modus*/);} oder alternativ direkt über die Display-Struktur bzw. generische Treiberfunktionen. 
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l | l }
+		\textbf{Funktion} & \textbf{Beschreibung} & \textbf{Kernfunktion} \\
+		\hline		
+		\texttt{display\_reset} & Display zurücksetzen & \texttt{kd\_reset} \\
+		\texttt{display\_enable} & Display aktivieren & \texttt{kd\_enable} \\
+		\texttt{display\_disable} & Display deaktivieren & \texttt{kd\_disable}\\
+		\texttt{display\_set\_textmode} & Textmodus setzen & \\
+		\texttt{display\_set\_graphicmode} & Rastermodus setzen & \\
+		\texttt{display\_flush} & Videopuffer darstellen & \\
+		\texttt{display\_clear} & Displayinhalt leeren & \\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Display-Controllers}
+	\label{tab:drv_display_func}
+\end{table}
+
+Die umgesetzten Treiberfunktionen des Interrupt-Controllers sind in \cref{tab:drv_irc_func} aufgelistet. Die \glspl{IRQ}, die verwendet werden dürfen, entsprechen exakt den Angaben aus \cref{tab:interrupts}.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ l | l }
+		\textbf{Funktion} & \textbf{Beschreibung} \\
+		\hline		
+		\texttt{irc\_is\_set} & Prüfen, ob \gls{IRQ} gesetzt \\
+		\texttt{irc\_clear} & \gls{IRQ} zurücksetzen \\
+		\texttt{irc\_set\_mask} & Maske für \gls{IRQ} setzen \\
+		\texttt{irc\_set\_pol} & Polarität für \gls{IRQ} setzen \\
+		\texttt{irc\_set\_edge} & Flankenerkennung für \gls{IRQ} setzen \\
+		\hline
+	\end{tabular}
+	
+	\caption{Treiberfunktionen des Interrupt-Controllers}
+	\label{tab:drv_irc_func}
+\end{table}
+
+\subsection{Dynamisches Speichermanagement}
+\label{sec:memalloc}
+
+Das dynamische Speichermanagement ist notwendig, um zur Laufzeit neue Speicherblöcke allozieren und Programme flexibler gestalten zu können. Da für den Plasma kein vollwertiges Betriebssystem verfügbar ist und aus Speichermangel auf die Verwendung der C-Standardbibliothek verzichtet wird, ist eine eigene Implementierung der \texttt{malloc} unf \texttt{free} Funktionen notwendig. Bei einem vollwertigen Betriebssystem würden diese über einen Syscall den Kernel anweisen, einen freien Speicherblock zurückzugeben. Auch darauf wird hier verzichtet, stattdessen rufen diese unmittelbar die \texttt{kmalloc} und \texttt{kfree} Umsetzungen der Firmware auf. Die Umsetzung, die von EmbeddedArtistry \cite{website:embedded_artistry_malloc} übernommen wird, baut auf einer verketteten Liste auf und gibt den jeweils ersten der angeforderten Größe entsprechenden Speicherblock zurück. 
+
+\subsection{I/O}
+
+Es wird eine neue Abstraktionsschicht zur Kommunikation mit den Geräten eingeführt. Diese bietet, ähnlich wie bei UNIX-artigen Betriebssystemen, dateibasierten Zugriff auf Geräte. Beispielsweise schreiben \mintinline{C}{fprint(display_file, "TEST")} und \mintinline{C}{fprint(uart_file, "TEST")} jeweils die Zeichenfolge \enquote{TEST} in den Video- und \gls{UART}-Puffer.  
+Um dies zu ermöglichen, wird eine \texttt{FILE}-Datenstruktur entworfen, welche einen Gerätedeskriptor sowie Ein- und Ausgabepuffer und die aktuelle Lese/Schreibposition abstrahiert. Über Funktionen, die mit den Datei-Funktionen aus der C-Standardbiblithek kompatibel sind, lassen sich Dateistrukturen öffnen, auslesen und beschreiben.
+Essentiell hierfür ist die in \cref{sec:memalloc} beschriebene dynamische Speicherallokation, mit der zur Laufzeit neue Dateistrukturen und Puffer alloziert werden können.
+
+\section{Portierung der Hardware für  DE1-SoC}
+\label{sec:impl_port_hw_to_de1_soc}
+
+Im ersten Schritt wird mit dem DE1-SoC SystemBuilder ein neues Projekt für Quartus erstellt. 
+Das Tool generiert zusätzlich zur Projektdatei eine Verilog-Datei mit der Top-Level-Entity und die entsprechende Datei mit den Pin-Zuordnungen (QSF). 
+Es werden, wie in \cref{fig:de1_soc_systembuilder} zu sehen ist, alle Optionen ausgewählt, damit die Pin-Zuordnung vollständig ist und bei künftigen Erweiterungen nicht angepasst werden muss. 
+
+\begin{figure}[!htbp]
+	\centering
+	\includegraphics[width=0.6\linewidth]{images/de1_soc_systembuilder}
+	\caption{DE1-SoC SystemBuilder}
+	\label{fig:de1_soc_systembuilder}
+\end{figure}
+
+In der Top-Level-Entity werden die Signalzuordnungen für VGA, Audio, Video, Infrarotsender, A/D Wandler und PS2 auskommentiert, da sie nicht gebraucht werden. 
+\alertinfo{Die aktuelle Revision des Entwicklungsboards hat bereits einen \SI{64}{\mega\byte} {SDRAM}-Chip verbaut, die Angabe im SystemBuilder (\SI{32}{\mega\byte} {SDRAM}) wurde allem Anschein nach nicht aktualisiert.}
+
+ Im zweiten Schritt wird das Quartus-Projekt überprüft und die tatsächliche Zielplattform zugewiesen, wie auf \cref{fig:quartus_device_settings} dargestellt. 
+
+\begin{figure}[!htbp]
+	\centering
+	\includegraphics[width=0.6\linewidth]{images/quartus_device_settings}
+	\caption{Quartus Boardeinstellungen}
+	\label{fig:quartus_device_settings}
+\end{figure}
+
+
+Darauffolgend wird der Platform Designer aufgerufen und über \textit{File \textrightarrow New Component} ein neuer IP-Core erstellt. 
+In \cref{fig:plasma_soc_ip_core} wird die Konfiguration für den Plasma-SoC IP-Core gezeigt.
+
+\begin{figure}[!htbp]
+	\centering
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=0.9\linewidth]{images/plasma_soc_ip_core_basic}
+		\caption{Grundeinstellungen}
+		\label{fig:plasma_soc_ip_core_basic}
+	\end{subfigure}%
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=0.9\linewidth]{images/plasma_soc_ip_core_files.pdf}
+		\caption{Quelldateien}
+		\label{fig:plasma_soc_ip_core_files}
+	\end{subfigure}
+	\caption{Plasma-\gls{SoC} IP-Core}
+	\label{fig:plasma_soc_ip_core}
+\end{figure}
+
+Leider kann ein mit dem Platform Designer erstelltes System nicht in Modelsim simuliert werden. Die Ursache dafür ist unklar. Darum wird ein neues Projekt \enquote{quartus\_no\_qsys} angelegt, welches ausschließlich das Plasma-System ohne QSYS-Komponenten beinhaltet und Simulationszwecken dient. 
+
+
+\subsection{RAM}
+Im bestehenden System werden Xilinx-Spezifische \gls{RAM}-Blöcke verwendet, dabei sind mehrere \gls{RAM}-Typen für Altera bzw. Xilinx konfigurierbar. Es gilt, eine passende Variante für den Altera-\glspl{FPGA} zu finden. 
+
+Dabei wird zunächst versucht, den \gls{RAM} über \gls{Inferring} zu implementieren. Dieses Verfahren erweist sich jedoch als ungeeignet, da bei der Synthese der gesamte im Entwicklersystem verfügbare Arbeitsspeicher inkl. Swap aufgebraucht wird:
+
+\begin{minted}[breaklines, autogobble]{text}
+Error (114016): Out of memory in module quartus\_map.exe (24430 megabytes used)
+
+Error (114016): Out of memory in module quartus\_map.exe (44107 megabytes used) 
+\end{minted}
+
+Als Nächstes werden die Altera \Gls{LPM} Bausteine untersucht. Die Synthese verläuft zwar erfolgreich, jedoch wird das Beispielprogramm nicht ausgeführt. Quartus bietet mit dem In-System Memory Content Editor \cite{manual:memedit} eine Möglichkeit, den Speicherinhalt zu überprüfen und ggf. zu modifizieren. Dazu muss der \gls{LPM}-\gls{RAM}-Instanziierung ein zusätzliches Parameter hinzugefügt werden: \textit{lpm\_hint => \enquote{ENABLE\_RUNTIME\_MOD = YES, INSTANCE\_NAME = <instantiation name>}} \cite[15-2]{manual:memedit}.
+
+Ein weiterer wichtiger Aspekt ist die Initialisierung des Speichers. Der Speicher kann unter Anderem mit einer \Gls{MIF}-Datei (\textbf{.mif}) oder Hexadecimal (Intel-format) Datei (\textbf{.hex}) initialisiert werden \cite[4-18]{manual:ug_ram}. Der Pfad zur Initialisierungsdatei wird im Parameter \textit{LPM\_FILE} angegeben. Verwendet wird in dieser Bachelorarbeit das MIF-Format; Details werden im \cref{sec:impl_extend_tools_for_de1_soc} beschrieben. 
+
+ Nach einem erneuten Testlauf stürzt der Memory Content Editor beim Versuch, den Speicherinhalt zu Laden, ab. Auffällig ist, dass die Blocktiefe 0 beträgt, wie in \cref{fig:quartus_memedit_fail} zu sehen ist. Dieser Wert ist ungültig \cite[4-9]{manual:ug_ram} und muss korrigiert werden. Aus dem Synthese-Log ergibt sich der zu setzende Parameter \textit{LPM\_NUMWORDS}:
+
+\begin{minted}[breaklines, highlightlines=4, autogobble]{text}
+	Info (12133): Instantiated megafunction (...) with the following parameter:	
+	Info (12134): Parameter "LPM_WIDTH" = "8"	
+	Info (12134): Parameter "LPM_WIDTHAD" = "11"	
+	Info (12134): Parameter "LPM_NUMWORDS" = "0"	
+	Info (12134): Parameter "LPM_INDATA" = "REGISTERED"	
+	Info (12134): Parameter "LPM_ADDRESS_CONTROL" = "REGISTERED"	
+	Info (12134): Parameter "LPM_OUTDATA" = "UNREGISTERED"	
+	Info (12134): Parameter "LPM_FILE" = "../../build/sw/examples/sample_ram_image.vhd_block_1.mif"	
+	Info (12134): Parameter "LPM_TYPE" = "LPM_RAM_DQ"	
+	Info (12134): Parameter "USE_EAB" = "ON"	
+	Info (12134): Parameter "INTENDED_DEVICE_FAMILY" = "UNUSED"
+	Info (12134): Parameter "LPM_HINT" = "ENABLE_RUNTIME_MOD = YES, INSTANCE_NAME = RAM1"
+\end{minted}
+
+
+Nach der Parametrisierung des Speichers ist der Inhalt vorhanden und auslesbar, wie in \cref{fig:quartus_memedit} dargestellt.  
+
+\begin{figure}[!htbp]
+	\centering
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=.9\linewidth]{images/quartus_memedit_fail}
+		\caption{Fehlerhafte LPM-Parametrisierung}
+		\label{fig:quartus_memedit_fail}
+	\end{subfigure}%
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=.9\linewidth]{images/quartus_memedit}
+		\caption{Korrekte LPM-Parametrisierung}
+		\label{fig:quartus_memedit}
+	\end{subfigure}
+	\caption{Ausgelesener Speicherinhalt}
+	\label{fig:cmp_mem_impl}
+\end{figure}
+
+\subsection{Register-File}
+Das Beispielprogramm wird dennoch nicht ausgeführt. Die Vermutung, dass das als \gls{RAM}-Block implementierte Register-File nicht synthetisiert wird, bestätigt sich durch eine Überprüfung der generierten Netzliste im RTL-Viewer. In \cref{fig:cmp_mem_reg_bank} sind die Netzlisten des Arbeitsspeichers und der Register-Datei gegenübergestellt. Während in \cref{fig:slave_mem_schematics} die \gls{LPM}-\gls{RAM}-Elemente deutlich zu sehen sind, ist im Register-File auf \cref{fig:reg_bank_schematics} nur Steuerlogik ohne \gls{RAM}-Blöcke erkennbar. 
+
+\begin{figure}[!htbp]
+	\centering
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=.9\linewidth]{images/slave_mem_schematics}
+		\caption{RAM}
+		\label{fig:slave_mem_schematics}
+	\end{subfigure}%
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=.9\linewidth]{images/reg_bank_schematics}
+		\caption{REG\_BANK}
+		\label{fig:reg_bank_schematics}
+	\end{subfigure}
+	\caption{Vergleich der RTL-Netzlisten}
+	\label{fig:cmp_mem_reg_bank}
+\end{figure}
+
+Es stellt sich heraus, dass für die Register-Datei der Speichertyp-Parameter mit dem ungeeigneten Wert \enquote{XILINX\_16X} konfiguriert ist und die Register-Datei deswegen nicht synthetisiert wird. Altera \gls{LPM}-\gls{RAM}-Blöcke erweisen sich ebenfalls als ungeeignet, da sie mit dem verwendeten Cyclone V \gls{FPGA} inkompatibel sind:
+
+\begin{minted}[breaklines, autogobble]{text}
+Warning (272007): DUAL PORT RAM for Cyclone V not possible with the altsyncram megafunction. Implementing using benchmarking mode, trying to tie up the inputs using available clocks. Output behavior will not be the same
+
+Error (287078): Assertion error: Can't convert dual-port RAM for Cyclone V device family using altsyncram megafunction because Cyclone V supports only synchronous dual-port RAM
+\end{minted}
+
+Es wird ein durch \gls{Inferring} synthetisierbarer Tri-Port Speicher mit zwei Lese- und einem Schreibport für die Register-Datei ausgewählt. 
+
+\subsection{Laufzeitverhalten}
+Durch Prüfung des Speicherinhalts während der Simulation fällt eine unsaktionierte Änderung des Arbeitsspeichers auf. Eine weitreichende Analyse zeigt, dass die Umsetzung des Arbeitsspeichers das vom Wishbone-Wrapper aus dem \textit{STB}-Signal generierte \textit{enable}-Signal nicht nutzt. Dies hat zur Folge, dass bei einem Schreibzugriff auf einen beliebigen Wishbone-Slave der auf dem Datenbus anliegende Wert in den Speicher übernommen wird. Nach der Behebung dieses Fehlers wird das Beispielprogramm korrekt ausgeführt und die im nächsten Abschnitt beschriebene Erweiterung der Hardware beginnt.
+
+\section{Erweiterung der Hardware für DE1-SoC}
+\label{sec:impl_extend_hw_for_de1_soc}
+
+\subsection{Avalon-Wishbone Bridge}
+
+Wie bereits im \cref{sec:theory_avalon} erwähnt, nutzt ein vom Platfom Designer generiertes \gls{SoC} den proprietären Avalon-\gls{Interconnect}. Das Plasma-\gls{SoC} hingegen setzt den Wishbone-\gls{Interconnect} ein. Damit beide Systeme sinnvoll verknüpft werden können, bedarf es einer Wishbone{$\leftrightarrow$}Avalon-\gls{Bridge}. 
+
+In \cref{tab:avalonmm_wishbone_comparison} ist eine Gegenüberstellung der wichtigsten Avalon-MM und Wishbone Schnittstellensignale dargestellt. Erkennbar ist, dass Takt-, Adress- und Datensignale, sowie die Steuersignale zum Großteil 1:1 zugeordnet werden können \cite{article:porting_from_wb_to_avalon}. Das \textit{chipselect}-Signal gilt als veraltet \cite[Appendix A]{manual:avalon_spec}. Darum werden die Zuordnungen zu den Steuersignalen wie \textit{cyc\_i}, \textit{stb\_i} und \textit{we\_i} durch kombinatorische Logik und Zustandsautomaten hergeleitet. Die Timingdiagramme sind jeweils für die Avalon\textrightarrow{}Wishbone- und Wishbone\textrightarrow{}Avalon-Bridge in \cref{fig:timing_avalon_wb_bridge} und \cref{fig:timing_wb_avalon_bridge} abgebildet.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | l | l | }
+		\hline
+	    \textbf{Wishbone Bus} & \textbf{Avalon-MM} \\
+	    \hline
+ 	    {clk\_i} & {clk} \\
+ 	    \hline
+  	    {rst\_i} & {reset\_n} \\
+  	    \hline
+  	    {cyc\_i} & {read \textit{or} write} \\
+  	    \hline
+  	    {stb\_i} & {chipselect bzw. read \textit{or} write} \\
+  	    \hline
+     	{we\_i} & {write \textit{and not} read} \\
+  	    \hline
+  	    {sel\_i} & {byteenable} \\
+  	    \hline
+  	    {adr\_i} & {address} \\
+  	    \hline
+	    {dat\_i} & {readdata} \\
+	    \hline
+   	    {dat\_o} & {writedata} \\
+   	    \hline
+   	    {ack\_o} & {waitrequest\_n} \\
+		\hline
+	\end{tabular}
+	
+	\caption{Avalon-MM und Wishbone Schnittstellen}
+	\label{tab:avalonmm_wishbone_comparison}
+\end{table}
+
+
+\begin{figure}[!htbp]
+	\centering
+	\begin{subfigure}{\textwidth}
+		\centering
+		\begin{tikztimingtable} [xscale=1.5,yscale=0.9]
+			clk      & [C]24{C} \\
+			\\
+			address                          & 10D{0} 2U 10D{10} 2U\\
+			byteenable              & 10D{F} 2U 10D{F} 2U \\
+			read              & 10H 2L 12L \\
+			write              & 12L 10H 2L \\
+			readdata        &  8U 2D{FF} 2U 12U\\
+			writedata              & 12U 10D{EE} 2U \\
+			waitrequest\_n              & 8L 2H 2L 8L 2H 2L \\
+			response              & 8D{}2D{}2D 8D{}2D{}2D \\
+			\\ % Gives vertical space
+			cyc\_o     & 2L 8H 2L 2L 8H 2L\\
+			stb\_o     & 2L 8H 2L 2L 8H 2L\\
+			adr\_o    & 10D{0} 2U 10D{10} 2U\\
+			we\_o     & 12L 10H 2L \\
+			sel\_o      & 2D{}8D{F}2D{}10D{F}2D \\
+			dat\_i 		& 8U 2D{FF} 2U 12U \\
+			dat\_o      & 12U 10D{EE} 2U \\
+			ack\_i     & 8L 2H 2L 8L 2H 2L\\
+			err\_i     & 12L 12L \\			
+		\end{tikztimingtable}
+		\caption{Avalon\textrightarrow{}Wishbone-Bridge}
+		\label{fig:timing_avalon_wb_bridge}
+	\end{subfigure}%
+
+	\medskip
+	
+	\begin{subfigure}{\textwidth}
+		\centering
+		\begin{tikztimingtable}[xscale=1.5,yscale=0.9]
+			clk      & [C]24{C} \\	
+			\\ % Gives vertical space
+			cyc\_i     & 10H 2L 10H 2L\\
+			stb\_i     & 2H 10L 2H 10L\\
+			adr\_i    & 10D{0} 2U 10D{10} 2U\\
+			we\_i     & 12L 10H 2L \\
+			sel\_i      & 10D{F}2D{}10D{F}2D \\
+			dat\_i 		& 8U 2D{FF} 2U 12U \\
+			dat\_o      & 12U 10D{EE} 2U \\
+			ack\_o     & 8L 2H 2L 8L 2H 2L\\
+			err\_o     & 12L 12L \\
+			\\
+			address        & 10D{0} 2U 10D{10} 2U\\
+			byteenable   & 10D{F} 2U 10D{F} 2U \\
+			read              & 2L 8H 2L 12L \\
+			write              & 12L 2L 8H 2L \\
+			readdata        &  8U 2D{FF} 2U 12U\\
+			writedata        & 12U 10D{EE} 2U \\
+			waitrequest\_n  & 8L 2H 2L 8L 2H 2L \\
+			response              & 8D{}2D{}2D 8D{}2D{}2D \\
+		\end{tikztimingtable}
+		\caption{Wishbone\textrightarrow{}Avalon-Bridge}
+		\label{fig:timing_wb_avalon_bridge}
+	\end{subfigure}
+	\caption{Wishbone{$\leftrightarrow$}Avalon-\gls{Bridge} Timings}
+	\label{fig:av_wb_timing}
+\end{figure}
+
+%\begin{figure}[!htbp]
+%	\centering	
+%	\begin{tikztimingtable} [xscale=1.5,yscale=0.9]
+%		clk      & [C]24{C} \\
+%		\\
+%		address                          & 10D{0} 2U 10D{10} 2U\\
+%		byteenable              & 10D{F} 2U 10D{F} 2U \\
+%		read              & 10H 2L 12L \\
+%		write              & 12L 10H 2L \\
+%		readdata        &  8U 2D{FF} 2U 12U\\
+%		writedata              & 12U 10D{EE} 2U \\
+%		waitrequest\_n              & 8L 2H 2L 8L 2H 2L \\
+%		response              & 8D{}2D{}2D 8D{}2D{}2D \\
+%		\\ % Gives vertical space
+%		cyc\_o     & 2L 8H 2L 2L 8H 2L\\
+%		stb\_o     & 2L 8H 2L 2L 8H 2L\\
+%		adr\_o    & 10D{0} 2U 10D{10} 2U\\
+%		we\_o     & 12L 10H 2L \\
+%		sel\_o      & 2D{}8D{F}2D{}10D{F}2D \\
+%		dat\_i 		& 8U 2D{FF} 2U 12U \\
+%		dat\_o      & 12U 10D{EE} 2U \\
+%		ack\_i     & 8L 2H 2L 8L 2H 2L\\
+%		err\_i     & 12L 12L \\			
+%	\end{tikztimingtable}
+%	\caption{Avalon\textrightarrow{}Wishbone-Bridge Timings}
+%	\label{fig:timing_avalon_wb_bridge}
+%\end{figure}
+%
+%\begin{figure}[!htbp]
+%	\centering	
+%	\begin{tikztimingtable}[xscale=1.5,yscale=0.9]
+%		clk      & [C]24{C} \\	
+%		\\ % Gives vertical space
+%		cyc\_i     & 10H 2L 10H 2L\\
+%		stb\_i     & 2H 10L 2H 10L\\
+%		adr\_i    & 10D{0} 2U 10D{10} 2U\\
+%		we\_i     & 12L 10H 2L \\
+%		sel\_i      & 10D{F}2D{}10D{F}2D \\
+%		dat\_i 		& 8U 2D{FF} 2U 12U \\
+%		dat\_o      & 12U 10D{EE} 2U \\
+%		ack\_o     & 8L 2H 2L 8L 2H 2L\\
+%		err\_o     & 12L 12L \\
+%			\\
+%		address        & 10D{0} 2U 10D{10} 2U\\
+%		byteenable   & 10D{F} 2U 10D{F} 2U \\
+%		read              & 2L 8H 2L 12L \\
+%		write              & 12L 2L 8H 2L \\
+%		readdata        &  8U 2D{FF} 2U 12U\\
+%		writedata        & 12U 10D{EE} 2U \\
+%		waitrequest\_n  & 8L 2H 2L 8L 2H 2L \\
+%		response              & 8D{}2D{}2D 8D{}2D{}2D \\
+%	\end{tikztimingtable}
+%	\caption{Wishbone\textrightarrow{}Avalon-Bridge Timings}
+%	\label{fig:timing_wb_avalon_bridge}
+%\end{figure}
+
+\subsection{Arbiter}
+
+Der bestehende Arbiter ist nicht funktionsfähig. Die Problematik fällt auf dem ZedBoard nicht auf, da der Wishbone-Bus dort mit nur einem Master betrieben wird. Der fehlerhafte Arbiter wird durch einen modifizierten, prioritätsbasierten Round-Robin Arbiter von Benjamin Krill \cite{website:vhdl_round_robin_arbiter} ersetzt.
+
+ Zunächst wird das Zweier-Komplement aus dem Request-Eingangssignal gebildet. Das Ergebnis und das Request-Eingangssignal werden mit dem UND-Operator bitweise verknüpft, wie in \cref{eq:request_lsb} zu sehen ist.  Das Endergebnis hat dann ein \gls{LSB} mit der höchsten Priorität \cite{website:vhdl_round_robin_arbiter}. 
+
+\begin{equation} \label{eq:request_lsb}
+	request_{lsb} = request_i \land (\overline{request_i} + 1)	
+\end{equation}
+
+In \cref{eq:mask} wird aus dem Request-Eingangssignal und dem gespeicherten vorherigem Grant-Signal eine Maske gebildet, welche dann nach Anwendung der \cref{eq:grant_next} das neue Grant-Signal ergibt \cite{website:vhdl_round_robin_arbiter}.  
+\begin{equation} \label{eq:mask}
+	mask = request_i \land (\overline{grant_{prev} - 1)  \lor grant_{prev}})
+\end{equation}
+
+\begin{equation} \label{eq:grant_next}
+	grant_{next} = mask \land (\overline{mask} + 1)
+\end{equation}
+
+Anschließend wird in \cref{eq:grant} entweder das neu generierte Grant-Signal bei einer gültigen Maske oder das Request-Signal mit der höchsten Priorität ausgewählt \cite{website:vhdl_round_robin_arbiter}. 
+\begin{equation} \label{eq:grant}
+	grant = \begin{cases}
+		grant_{next}, 	& \text{if } mask \neq 0 \\
+		request_{lsb}, 	& \text{otherwise}
+		\end{cases}
+\end{equation}
+
+Zur Anbindung dieses Arbiters an den Wishbone-Bus wird dieser zusätzlich mit einem One-Hot dekodierten Grant-Signal versehen, da sich  so der entsprechende Master mit den Daten-, Adress- und Steuersignalen einfacher selektieren lässt. Der Wishbone-Wrapper für die \gls{CPU} wird ebenfalls angepasst, sodass die Wishbone-Steuersignale \textit{CYC} und \textit{STB} nur bei einer gültigen Buszuteilung generiert werden.
+
+\subsection{Wishbone-Bus}
+
+Nach der Einführung des verbesserten Arbiters fällt auf, dass die Adresse nach Auswahl des Masters erst einen Taktzyklus später dekodiert anliegt, was zum falschen Betriebsablauf führt. Als Konsequenz wird auf eine mit dem Takt verknüpfte Auswertung und Speicherung im Register verzichtet.
+
+Beim simulationsbasierten Testen der Avalon\textrightarrow{}Wishbone-Bridge, welche als Wishbone-Master fungiert, fällt auf, dass ein vom Slave bereitgestelltes Datenwort erst zwei Taktzyklen nach dem \textit{ACK}-Signal anliegt. Dadurch werden fehlerhafte Werte übernommen.
+Um dieses Problem zu umgehen, wird aus dem Wishbone-Bus die letzte an den Takt gebundene Komponente vom Takt enkoppelt. Dadurch verursacht der Bus keine nennenswerte Verzögerung mehr und die Daten liegen zeitgleich an den Ein- und Ausgängen an. Bei höheren Taktfrequenzen könnte es jedoch zu Problemen führen.
+
+Die Plasma-\gls{CPU} erwartet die Daten jedoch immer noch mit einem Taktzyklus Versatz. Darum wird im Wishbone-Wrapper der Plasma-\gls{CPU} ein Register für die Datenleitung hinzugefügt, sodass das aktuell anliegende Datenwort erst einen Takt später zur Verfügung steht. 
+
+\subsection{Externer SDRAM}
+\label{sec:external_sdram}
+Auf dem DE1-SoC-Board ist ein SDRAM-Chip mit der Modellnummer \texttt{IS42S16320D} von ISSI Technologies verbaut. Dieser fasst \SI{64}{\mega\byte} (32Mx16) und ist mit dem \gls{FPGA} über eine \SI{16}{\bit} breite Datenleitung sowie Kontroll- und Adressleitungen verbunden \cite[38]{manual:de1soc}. Die Grundparameter lassen sich aus \cref{tab:sdram_timings} und \cref{tab:sdram_addresses} entnehmen.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | l | c | c | c | c | }
+		\hline
+		\textbf{Parameter} & \textbf{-5} &  \textbf{-6} &  \textbf{-7} & \textbf{Einheit} \\
+		\hline
+		Taktzykluszeit & & & & \\
+		\hspace{3mm}\textoverline{CAS} - Latenz = 3 & 5 & 6 & 7 & \SI{}{\nano\second} \\
+		\hspace{3mm}\textoverline{CAS} - Latenz = 2 & 10 & 10 & 7.5 & \SI{}{\nano\second} \\
+		\hline
+		Taktfrequenz & & & & \\
+		\hspace{3mm}\textoverline{CAS} - Latenz = 3 & 200& 167 & 143 & \SI{}{\mega\hertz} \\
+		\hspace{3mm}\textoverline{CAS} - Latenz = 2 & 100 & 100 & 133 & \SI{}{\mega\hertz} \\
+		\hline
+		Zugriffszeit & & & & \\
+		\hspace{3mm}\textoverline{CAS} - Latenz = 3 & 5.0 & 5.4 & 5.4 & \SI{}{\nano\second} \\
+		\hspace{3mm}\textoverline{CAS} - Latenz = 2 & 6 & 6 & 5.4 & \SI{}{\nano\second} \\
+		\hline
+	\end{tabular}
+	\caption{Timing Parameter \cite[1]{manual:issi_sdram}}
+	\label{tab:sdram_timings}
+\end{table}
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{ | l | l | l | l |}
+		\hline
+		\textbf{Parameter} & \textbf{16M x 32} & \textbf{32M x 16} & \textbf{64M x 8} \\
+		\hline
+		Konfiguration & 4M x 32 x 4 banks & 8M x 16 x 4 banks & 16M x 8 x 4 banks\\
+		\hline
+		Bank Adress Pins & BA0, BA1 & BA0, BA1 & BA0, BA1 \\
+		\hline
+		Autoprecharge Pins & A10/AP & A10/AP & A10/AP \\
+		\hline
+		Zeilenadresse & 512(A0 – A8) & 1K(A0 – A9) & 2K(A0 – A9, A11) \\
+		\hline
+	\end{tabular}	
+	\caption{Adresstabelle \cite[1]{manual:issi_sdram}}
+	\label{tab:sdram_addresses}
+\end{table}
+
+Um den Speicher in Betrieb zu nehmen, ist ein SDRAM-Controller nötig. Dieser steht als IP-Core im Platform Designer zur Verfügung. Folgende Parameter werden mit neuen Werten überschrieben \cite[6]{manual:using_the_sdram}:
+
+\begin{easylist}[itemize]
+	& Bits: 16
+	& Chip select: 1
+	& Banks: 4 (vgl. Konfiguration in \cref{tab:sdram_addresses})
+	& Row: 13
+	& Column: 10 (vgl. Zeilenadresse in \cref{tab:sdram_addresses})	
+\end{easylist}
+
+Die Timings werden ebenfalls angepasst \cite[6]{manual:using_the_sdram}:
+
+\begin{easylist}[itemize]
+	& CAS latency cycles: 3
+	& Issue one refresh command every: \SI{7.8125}{\micro\second}
+	& Duration of refresh command(t\_rp): \SI{15.0}{\nano\second}
+	& Duration of precharge command(t\_rcd): \SI{15.0}{\nano\second}
+	& Access time(t\_ac): \SI{5.4}{\nano\second} (vgl. Zugriffszeit in \cref{tab:sdram_timings})
+\end{easylist}
+
+In \cref{fig:sdram_ctl_params} und \cref{fig:sdram_controller_timings} sind die Parameter im Konfigurationsdialog des SDRAM-Controller-IP-Core abgebildet. 
+
+\begin{figure}[!htbp]
+	\centering
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=.9\linewidth]{images/sdram_ctl_params.pdf}
+		\caption{Allgemeine Parameter}
+		\label{fig:sdram_ctl_params}
+	\end{subfigure}%
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=.9\linewidth]{images/sdram_controller_timings.pdf}
+		\caption{Timings}
+		\label{fig:sdram_controller_timings}
+	\end{subfigure}
+	\caption{Parametrisierung des SDRAM-Controllers}
+	\label{fig:sdram_controller_params}
+\end{figure}
+
+Die korrekte Funktion des SDRAM hängt auch von den physikalischen Charakteristika des Boards ab. Unter Anderem hat die Länge der Verbindungsleitungen zwischen dem SDRAM-Chip und dem \gls{FPGA} einen Einfluss auf möglichen Taktversatz. Darum wird eine \gls{PLL} benötigt, die den SDRAM-Takt dem Systemtakt unter Berücksichtigung der physikalischen Parameter um \SI{3}{\nano\second} vorauseilen lässt \cite[13]{manual:using_the_sdram}. 
+
+Dies kann durch Hinzufügen und geeignete Parametrisierung eines \gls{PLL}-IP-Cores oder alternativ durch Hinzufügen des \textit{Clocks Signals for DE-Series Board Peripherals}-IP-Cores geschehen. Die erste Variante setzt eine Berechnung der notwendigen Parameter oder eine aufwändige Analyse mit einem Oszilloskop voraus, sodass die Daten in einem korrekten Zeitfenster anliegen \cite[355ff]{manual:ug_ip_cores}. 
+
+Es wird die zweite Variante gewählt, da sie wesentlich einfacher ist und nur eine Auswahl der Zielhardware im in \cref{fig:sdram_pll_config} dargestellten Konfigurationsdialog erfordert. Es werden der Referenztakt von \SI{50}{\mega\hertz}, der gewünschte Systemtakt von \SI{50}{\mega\hertz} sowie die Zielhardware (das DE1-SoC-Board) eingestellt.
+
+\begin{figure}[!htbp]
+	\centering
+	\includegraphics[width=0.6\linewidth]{images/sdram_pll_config}
+	\caption{Parametrisierung des \textit{Clocks Signals for DE-Series Board Peripherals}-IP-Core}
+	\label{fig:sdram_pll_config}
+\end{figure}
+
+Ein wichtiger Aspekt ist, dass der verbaute SDRAM einen \SI{16}{\bit} breiten Datenbus hat. In \cref{fig:sdram_signaltap_waveform} ist ein mit SignalTap aufgezeichneter Zugriff auf den externen SDRAM dargestellt. Von Interesse sind die blau umrahmten Wellenformen für \textit{...|avm\_read} und \textit{...|avm\_waitrequest\_n}. Am oberen Rand der \cref{fig:sdram_signaltap_waveform} ist die Zeit- bzw. Taktleiste zu sehen. Durch Abgleich der Wellenform mit der Zeitleiste lässt sich schlussfolgern, dass der gesamte Lesezyklus 6 Taktzyklen dauert. Da der SDRAM-Controller mit CAS=3 konfiguriert ist, liegen die Daten nach 3 Taktzyklen am Datenbus an. Entsprechend wird ein \SI{32}{\bit} Datenwort aus zwei \SI{16}{\bit} Transfers zusammengesetzt, welche dann zusammen 2x3 Taktzyklen ergeben. 
+
+\begin{figure}[!htbp]
+	\centering
+	\includegraphics[width=1\linewidth]{images/sdram_signaltap_waveform2}
+	\caption{Mit SignalTap aufgezeichneter Zugriff auf den externen SDRAM}
+	\label{fig:sdram_signaltap_waveform}
+\end{figure}
+
+
+\subsection{Parallel I/O}
+
+Nach der Fertigstellung der Wishbone{$\leftrightarrow$}Avalon-\gls{Bridge} werden im Platform Designer 8 \gls{PIO}-IP-Cores an die \gls{Bridge} angebunden.
+
+Sechs IP-Cores werden als Ausgänge mit \SI{7}{\bit} Datenbusbreite konfiguriert und mit sechs verfügbaren 7-Segment-Anzeigen verbunden. 
+
+Ein weiterer wird als \SI{10}{\bit}-Eingang konfiguriert und mit dem Schalterblock verbunden, und der letzte wird als \SI{4}{\bit}-Eingang mit dem Tasterblock verbunden.
+
+\subsection{HPS}
+
+Im Platform Designer wird ein \gls{HPS}-Modul hinzugefügt. Dadurch wird die Kommunikation zwischen der \gls{ARM}-\gls{CPU} und dem konfiguriertem System ermöglicht. 
+
+DIe Konfiguration der \gls{FPGA}-Schnittstellen ist in \cref{fig:hps_fpga_interfaces} dargestellt. Es werden Interrupts vom \gls{FPGA} zum \gls{HPS} und drei \gls{AXI}-\Glspl{Bridge} aktiviert: 
+	\begin{easylist}[itemize]
+		& \gls{FPGA}\textrightarrow{}\gls{HPS}, \SI{128}{\bit} breit
+		& \gls{HPS}\textrightarrow{}\gls{FPGA}, \SI{128}{\bit} breit
+		& Lightweight \gls{HPS}\textrightarrow{}\gls{FPGA}, \SI{32}{\bit} breit
+	\end{easylist}
+
+Der Avalon-Slave Port des Plasma-\gls{SoC} wird an die \gls{HPS}\textrightarrow{}\gls{FPGA}-\gls{Bridge} angebunden. Dadurch wird dem \gls{HPS} der Zugriff auf den gesamten Adressraum des Plasma-\gls{SoC} ermöglicht. 
+
+Die Konfiguration der Peripherie-Pins ist in \cref{fig:hps_periph_pins} dargestellt. 
+\begin{figure}[!htbp]
+	\centering
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=.9\linewidth]{images/hps_fpga_interfaces}
+		\caption{\gls{FPGA}-Schnittstellen}
+		\label{fig:hps_fpga_interfaces}
+	\end{subfigure}%
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=.9\linewidth]{images/hps_periph_pins.pdf}
+		\caption{Peripherie-Pins}
+		\label{fig:hps_periph_pins}
+	\end{subfigure}
+	\caption{\gls{HPS}: Konfiguration}
+	\label{fig:hps_params}
+\end{figure}
+
+Die SDRAM-Konfiguration wird zum bis auf den Memory-Vendor aus einer CERN-Projektdokumentation \cite[6-8]{article:cern_socfpga} übernommen. Die Konfigurationspanels für \gls{PHY}-, \gls{RAM}-, Timing- und Board-Parameter sind in \cref{fig:hps_sdram_params} abgebildet.
+
+\begin{figure}[!htbp]
+	\centering
+	\begin{subfigure}[b]{0.475\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{images/hps_sdram_phy}
+	\caption{\gls{PHY}}
+		\label{fig:hps_sdram_phy}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[b]{0.475\textwidth}  
+		\centering 
+		\includegraphics[width=\textwidth]{images/hps_sdram_board_params}
+		\caption{Board}
+		\label{fig:hps_sdram_board_params}
+	\end{subfigure}
+	\vskip\baselineskip
+	
+	\begin{subfigure}[b]{0.475\textwidth}   
+		\centering 		
+		\includegraphics[width=\textwidth]{images/hps_sdram_mem_param}
+		\caption{\gls{RAM}}
+		\label{fig:hps_sdram_mem_param}
+	\end{subfigure}
+	\quad
+	\begin{subfigure}[b]{0.475\textwidth}   
+		\centering 
+		\includegraphics[width=\textwidth]{images/hps_sdram_mem_timings}
+		\caption{Timings}
+		\label{fig:hps_sdram_mem_timings}
+	\end{subfigure}
+	\caption{\gls{HPS} SDRAM-Konfiguration}
+	\label{fig:hps_sdram_params}
+\end{figure}
+
+Nach der Konfiguration des \gls{HPS} und des Arbeitsspeichers muss im Quartus zuerst der \enquote{Analysis \& Synthesis} ausgeführt werden. Danach muss über \textit{Tools}\textrightarrow\textit{TCL Scripts} das \enquote{hps\_sdram\_p0\_assignments.tcl}-Skript ausgeführt werden. Der Skript-Dialog ist in \cref{fig:script_pinassignments} dargestellt.
+
+Dieser Schritt ist notwendig, da vor der Konfiguration keine Timing-Parameter bekannt waren und so keine Pin-Zuweisung für den Arbeitsspeicher vorgenommen werden konnte \cite[46]{article:embedded_systems}. 
+
+\begin{figure}[!htbp]
+	\centering
+	\includegraphics[width=0.61\linewidth]{images/script_pinassignments}
+	\caption{Tcl Scripts: hps\_sdram\_p0\_pin\_assignments.tcl}
+	\label{fig:script_pinassignments}
+\end{figure}
+
+\subsection{System ID}
+
+Ein System ID Peripheral IP-Core wird im Platform Designer hinzugefügt und an die Lightweight \gls{HPS}\textrightarrow{}\gls{FPGA}-Bridge angebunden. Für den einzigen konfigurierbaren Parameter \enquote{\SI{32}{\bit} System-ID} wird der Wert \texttt{0xDEADBEEF} gewählt.
+
+%, wie in \cref{fig:system_id_params} zu sehen ist.
+%
+%\begin{figure}[!htbp]
+%	\centering
+%	\includegraphics[width=0.4\linewidth]{images/system_id_params}
+%	\caption{Parametrisierung des \textit{System ID Peripheral}-IP-Core}
+%	\label{fig:system_id_params}
+%\end{figure}
+
+\subsection{Adresszuordnung}
+
+Die Adresszuordnung der Plasma-\gls{SoC}-Komponenten wird überarbeitet. Dadurch ergibt sich, wie in \cref{tab:wb_plasma_de1soc_address_map} aufgelistet, eine im Vergleich zur Adresszuordnung in \cref{tab:wb_plasma_zedboard_address_map} und unter Berücksichtigung der neuen Komponenten verbessere Nutzung der Adressbereiche. Über die Wishbone{$\leftrightarrow$}Avalon-\gls{Bridge} angesteuerte Slaves sind mit einem grauen Hintergrund hervorgehoben.
+
+\begin{table}[!htbp]
+	\bigskip
+	\centering
+	\begin{tabular}{| l | r | r |}
+		\hline	
+		\textbf{Gerät} & \textbf{Startadresse} & \textbf{Adressbereich} \\
+		\Xhline{2\arrayrulewidth}		
+		\gls{RAM}\textsubscript{0}& \texttt{0x00000000} & \texttt{00001FFF} \\
+		\hline		
+		IRC\textsubscript{0} & \texttt{0x00005000} & \texttt{0x1F} \\
+		\hline		
+		UART\textsubscript{0}& \texttt{0x00005100} & \texttt{0x0F} \\
+		\hline
+		\multirow{4}{*}{Timer\textsubscript{0:3}} & \texttt{0x00005200} & \texttt{0x0F} \\
+		& \texttt{0x00005210} & \texttt{0x0F} \\
+		& \texttt{0x00005220} & \texttt{0x0F} \\
+		& \texttt{0x00005230} & \texttt{0x0F} \\
+		\hline
+		\multirow{4}{*}{Zähler\textsubscript{0:3}} & \texttt{0x00005300} & \texttt{0x0F} \\
+		& \texttt{0x00005310} & \texttt{0x0F} \\
+		& \texttt{0x00005320} & \texttt{0x0F} \\
+		& \texttt{0x00005330} & \texttt{0x0F} \\
+		\hline
+		\multirow{4}{*}{GPIO\textsubscript{0:3}}  & \texttt{0x00005400} & \texttt{0x0F} \\
+		& \texttt{0x00005410} & \texttt{0x0F} \\
+		& \texttt{0x00005420} & \texttt{0x0F} \\
+		& \texttt{0x00005430} & \texttt{0x0F} \\
+		\hline
+		SPI\textsubscript{0} & \texttt{0x00005500} & \texttt{0x0F} \\
+		%\hline
+		\Xhline{2\arrayrulewidth}
+		\rowcolor{gray!30}Wishbone\textrightarrow{}Avalon-\gls{Bridge} & \texttt{0x10000000} & \texttt{0x0FFFFFFF} \\
+		\hline
+		\rowcolor{gray!20}\gls{RAM}\textsubscript{1} & \texttt{0x10000000} & \texttt{0x03FFFFFF} \\
+		\hline
+		\rowcolor{gray!20} & \texttt{0x14000070} & \texttt{0x0F} \\
+		\rowcolor{gray!20} & \texttt{0x14000060} & \texttt{0x0F} \\
+		\rowcolor{gray!20} & \texttt{0x14000050} & \texttt{0x0F} \\
+		\rowcolor{gray!20} & \texttt{0x14000040} & \texttt{0x0F} \\
+		\rowcolor{gray!20} & \texttt{0x14000030} & \texttt{0x0F} \\
+		\rowcolor{gray!20} \multirow{-6}{*}{HEX\textsubscript{0:5}} & \texttt{0x14000020} & \texttt{0x0F} \\
+		\hline
+		\rowcolor{gray!20} Schalter\textsubscript{0} & \texttt{0x14000010} & \texttt{0x0F} \\
+		\hline
+		\rowcolor{gray!20} Taster\textsubscript{0} & \texttt{0x14000000} & \texttt{0x0F} \\
+		\hline
+	\end{tabular}
+	
+	\caption[Plasma-SoC Adresszuordnung]{Plasma-SoC Adresszuordnung. Grau markierte Komponenten sind an die Wishbone\textrightarrow{}Avalon-\gls{Bridge} angebunden }
+	\label{tab:wb_plasma_de1soc_address_map}
+\end{table}
+
+\subsection{Zusammenfassung}
+
+Das Gesamtsystem besteht nun aus einem \gls{SoC}-\gls{FPGA} mit einem Plasma-\gls{SoC} im \gls{FPGA}-Bereich. 
+Auf alle Geräte und Speicher des Plasma-\gls{SoC} kann vom \gls{HPS} aus zugegriffen werden, da nun, wie in \cref{fig:complete_system} zu sehen ist, alle Komponenten über einen Bus mit dem \gls{HPS} verbunden sind.
+
+\begin{figure}[!htbp]
+	\centering
+	\includegraphics[width=1\linewidth]{images/complete_system}
+	\caption{Das Gesamtsystem im Platform Designer}
+	\label{fig:complete_system}
+\end{figure}
+
+
+\section{Unterstützende Software}
+\label{sec:impl_extend_tools_for_de1_soc}
+
+Zur Initialisierung des internen Arbeitsspeichers muss, wie bereits im \cref{sec:impl_port_hw_to_de1_soc} erwähnt, eine \gls{MIF}-Datei verwendet werden. Um den Speicher mit einer \gls{ELF}-Datei zu initialisieren, wird das \texttt{convert.py}-Skript um einen dem MIF-Format \cite{manual:mif_help} entsprechenden \gls{MIF}-Generator erweitert.
+
+%Diese Datei hat eine im \cref{lst:mif_format} angegebene Struktur. 
+
+%\begin{code}	
+%	\begin{minted}[breaklines, autogobble]{text}
+%	-- Speichertiefe (DEPTH) und -breite (WIDTH) sind Pflichtfelder	
+%	-- DEPTH und WIDTH werden als Dezimalzahlen angegeben
+%	DEPTH = 32; -- DEPTH ist die Anzahl der Adressen
+%	WIDTH = 14; -- WIDTH ist die Datenwortbreite
+%	
+%	-- Adress- und Datenbasis sind Pflichtfelder
+%	-- Erlaubte Werte: BIN, DEC, HEX, OCT, oder UNS; 
+%	-- Standardwert: HEX	
+%	ADDRESS_RADIX = HEX; 
+%	DATA_RADIX = HEX; 
+%	
+%	-- Hier werden Adress und Wertpaare angegeben. 
+%	-- Adressen können sowohl als Einzeladressen als auch Adressbereiche angegeben werden.
+%	CONTENT 
+%	BEGIN 
+%	[0..F] :   3FFF;  -- Adressbereich: Alle Adressen von 0 bis F = 3FFF
+%	6      :   F;     -- Einzeladresse: Adresse 6 = F
+%	8      :   F E 5; -- Adressbereich mit einer festgelegten Startadresse
+%	                  -- Addr[8] = F, Addr[9] = E, Addr[A] = 5
+%	END; 
+%	
+%	\end{minted}
+%	
+%	\caption{Struktur des Memory Initialization File \cite{manual:mif_help}}
+%	\label{lst:mif_format}
+%\end{code}
+
+Ein längere Zeit bestehendes Problem des in \cref{sec:arch_plasma_soc_zedboard} beschriebenen Systems ist das scheinbar von der Programmgröße abhängige Laufzeitverhalten. Durch eine simulationsbasierte Überprüfung des zeitlichen Verlaufs der am Wishbone-Bus anliegenden Adressen und Daten wird festgestellt, dass Variablen in den \texttt{.sdata} und \texttt{.sbss}-Sektionen überschrieben werden. Die Vermutung, dass die Linker-Konfiguration fehlerhaft ist, wird durch einen Vergleich zwischen dem standard-Linkerskript für \gls{MIPS}-\RN{1}-Prozessoren und der eigenen Linker-Konfiguration bestätigt. 
+
+Auffällig sind die nicht übereinstimmenden Positionen der Global Pointer (\texttt{\_gp}) und die Byte-Ausrichtungen. Die eigene Linker-Konfiguration wird so korrigiert, dass der Global Pointer wie im Standard-Linkerskript zwischen den \texttt{.data} und \texttt{.sdata}-Sektionen liegt und an einer \SI{16}{\byte}-Grenze ausgerichtet ist. Nach dieser Korrektur werden die \texttt{.sdata} und \texttt{.sbss}-Sektionen zu keinem Zeitpunkt überschrieben und eine korrekte Ausführung der Anwendungen ist gewährleistet.
+
+%Das voreingestellte Linkerskript lässt sich durch Aufruf des Linkers mit dem \texttt{-verbose}-Schalter ausgeben: \texttt{mips-linux-gnu-ld -verbose}. Die auf das Wesentliche reduzierte Ausgabe ist im \cref{lst:linkerscript_default} zu sehen. 
+%
+%\begin{code}	
+%	\begin{minted}[breaklines, autogobble, highlightlines=7]{text}
+%	...
+%	.data :
+%	{
+%		...
+%	}
+%	...
+%	HIDDEN (_gp = ALIGN (16) + 0x7ff0);
+%	...
+%	.sdata :
+%	{
+%	...
+%	}
+%	...
+%	.sbss :
+%	{
+%	...
+%	}
+%	
+%	\end{minted}
+%	
+%	\caption{MIPS-\RN{1} - Linkerskript (Voreinstellung)}
+%	\label{lst:linkerscript_default}
+%\end{code}
+%
+%Zum Vergleich ist im \cref{lst:linkerscript_faulty} die auf das Wesentliche reduzierte eigene Linker-Konfiguration angegeben.
+%Auffällig ist, dass die Positionen des Global Pointer (\texttt{\_gp}) sowie die Byte-Ausrichtung nicht übereinstimmen. Die eigene Linker-Konfiguration (siehe \cref{lst:linkerscript_faulty}) wird so korrigiert, dass der Global Pointer wie in \cref{lst:linkerscript_default} zwischen den \texttt{.data} und \texttt{.sdata}-Sektionen liegt und an einer \SI{16}{\byte}-Grenze ausgerichtet ist. Nach dieser Korrektur werden die \texttt{.sdata} und \texttt{.sbss}-Sektionen zu keinem Zeitpunkt überschrieben und eine korrekte Ausführung der Anwendungen ist gewährleistet.
+%
+%\begin{code}
+%	
+%	\begin{minted}[breaklines, autogobble, highlightlines=11]{text}
+%	...
+%	.data :
+%	{ 
+%	...
+%	}
+%	...	
+%	.sdata :
+%	{
+%	... 
+%	}		
+%	__gp = .;		
+%	.sbss : 
+%	{
+%	...
+%	}
+%	...
+%	\end{minted}
+%	
+%	\caption{MIPS-\RN{1} - Linkerskript (Fehlerhaft)}
+%	\label{lst:linkerscript_faulty}
+%\end{code}
+
+
+\section{Portierung der Plasma-Firmware und der Beispielanwendung}
+\label{sec:impl_port_plasma_sw_to_de1_soc}
+Die Portierung der Firmware erfolgt in Form einer neuen Systemdefinitionsdatei mit einer neuen Adresszuordnung und anderen Komponenten. Die bestehende Definition wird in die Datei \texttt{platform/plasma\_soc.zedboard.h} ausgelagert, und die neue in der Datei \texttt{platform/plasma\_soc.de1\_soc.h} erstellt. Die CMake Build-Skripte werden um neue Einträge erweitert, welche die zwei verschiedenen Systemkonfigurationen repräsentieren. Dabei wird ein Präprozessor-Makro definiert, welcher in der Datei \texttt{plasma\_soc.h} ausgewertet wird und dadurch die passende Systemdefinition einbezogen wird.
+Die Headerverzeichnisse der Firmware werden ebenfalls umbenannt, um Kollisionen mit den Linux-Headerverzeichnissen zu vermeiden: \textit{dev} und \textit{sys} werden jeweils mit dem Präfix \enquote{k} versehen. 
+
+Aus der Beispielanwendung werden die Funktionen für die \gls{UART}-Ein- und Ausgabe sowie die Displayausgabe entfernt. 
+Stattdessen erfolgt die Anzeige der seit dem Systemstart vergangenen Zeit über die auf dem Board vorhandenen 7-Segment Anzeigen. Dafür wird eine Funktion entwickelt, welche für Ganzzahlen im Bereich von \texttt{0x0...0xF} für Common-Anode 7-Segment-Anzeigen geeignete Codes zurückgibt.
+
+Die LED-Lauflichtfunktion wird erweitert, sodass die Richtung und Muster konfigurierbar sind. Das LED-Muster ist im externen SDRAM über die Adresse \texttt{0x800} und die Richtung über der Adresse \texttt{0x804} ansprechbar.
+
+\section{Einrichtung eines Linux-Betriebssystems}
+\label{sec:impl_setup_linuxfor_de1_soc}
+
+In diesem Abschnitt wird in mehreren Schritten vom Devicetree über Bootloader und Kernel bis hin zur Entwicklung eines Treibers ein individuell eingerichtetes Linux-Betriebssystem erstellt. Sehr hilfreich für das Verständnis ist die Embedded-Linux Anleitung von RocketBoards.org \cite{website:embedded_linux_beginners_guide}.
+\subsection{Devicetree}
+\label{sec:impl_devicetree}
+Damit im Betrieb unter Linux die Hardware richtig erkannt wird und auch eigene Treiber geladen werden können, muss eine Devicetree-Definition erstellt werden. 
+
+Zwar ist es möglich, mit der Altera SoC EDS Entwicklungsumgebung eine Device-Tree-Datei zu generieren, jedoch ist das Ergebnis nicht zufriedenstellend. Bis auf die Plasma-\gls{SoC}- und SysID-Einträge fehlen alle weiteren im Platform Designer definierten Komponenten. Außerdem führen Kompatibilitätsprobleme mit verschiedenen Kernel-Versionen zur Fehlfunktion der Treiber und/oder Absturz des Systems. 
+
+Aus diesem Grund wird gemäß Spezifikation Devicetree v0.2 \cite{manual:devicetree_specification} eine für das Plasma-\gls{SoC} und das DE1-SoC-Board geeignete Devicetree-Datei \texttt{socfpga\_cyclone5\_de1\_soc.dts} entworfen. Mit dem C-Präprozessor werden die Definitionen aus den Originaldateien \texttt{socfpga.dtsi} und \texttt{socfpga\_cyclone5.dtsi} miteinander verknüpft \cite[Version~4.9.78-ltsi, \texttt{arch/arm/boot/dts/}]{website:linux_socfpga_repository}. 
+
+
+Nachfolgend werden die wichtigsten Fragmente beschrieben. 
+
+%Das \texttt{sopc2dts}-Programm erwartet eine \texttt{sopcinfo} Datei, welche bei der Generierung der HDL-Dateien im Platform Designer entsteht. 
+%
+%\begin{code}	
+%	\begin{minted}[breaklines, autogobble]{text}
+%	sopc2dts --input ${sopcinfo} \
+%	--output dts/plasma_soc.dts \
+%	--type dts \
+%	--board dts/soc_system_board_info.xml \
+%	--board dts/hps_clock_info.xml \
+%	--bridge-removal all
+%	\end{minted}
+%	
+%	\caption{Ausschnitt aus der generierten DTS-Datei}
+%	\label{lst:sopc2dts}
+%\end{code}
+
+%Die mit den Altera-Tools aus der \texttt{sopcinfo}-Datei generierte Devicetree-Defintion ist nicht zufriedenstellend. Bis auf die Plasma-\gls{SoC}- und SysID-Einträge fehlen alle weiteren im Platform Designer angebundenen Komponenten. Außerdem sind die Gerätebeschreibungen nicht mit allen Kernel-Versionen kompatibel, was zur Folge hat, dass die Treiber unter Umständen nicht korrekt funktioneren oder das System nicht startet. 
+
+%\begin{code}	
+%	\begin{minted}[breaklines, autogobble]{text}
+%	... 
+%	hps_0_bridges: bridge@0xc0000000 {
+%		compatible = "altr,bridge-18.0", "simple-bus";
+%		reg = < 0xC0000000 0x20000000 0xFF200000 0x00200000 >;
+%		reg-names = "axi_h2f", "axi_h2f_lw";
+%		#address-cells = < 2 >;
+%		#size-cells = < 1 >;
+%		ranges = < 0x00000000 0x00000000 0xC0000000 0x20000000 0x00000001 0x00000000 0xFF200000 0x00000008 >;
+%		
+%		plasma_soc_0: unknown@0x000000000 {
+%			compatible = "unknown,unknown-1.0";
+%			reg = < 0x00000000 0x00000000 0x20000000 >;
+%		}; //end unknown@0x000000000 (plasma_soc_0)
+%		
+%		sysid_qsys_0: sysid@0x100000000 {
+%			compatible = "ALTR,sysid-18.0", "ALTR,sysid-1.0", "altr,sysid-1.0";
+%			reg = < 0x00000001 0x00000000 0x00000008 >;
+%			id = < 3735928559 >;	/* embeddedsw.dts.params.id type NUMBER */
+%			timestamp = < 1536706156 >;	/* embeddedsw.dts.params.timestamp type NUMBER */
+%		}; //end sysid@0x100000000 (sysid_qsys_0)
+%	}; //end bridge@0xc0000000 (hps_0_bridges)
+%	...
+%	\end{minted}
+%	
+%	\caption{Ausschnitt aus der generierten DTS-Datei}
+%	\label{lst:generated_dts}
+%\end{code}
+
+%Darum wird gemäß Devicetree Spezifikation \cite{manual:devicetree_specification} eine für das Plasma-SoC auf dem DE1-SoC-Board geeignete Devicetree-Datei \texttt{socfpga\_cyclone5\_de1\_soc.dts} entworfen. Über einen include-Mechanismus werden die Definitionen aus den Originaldateien \texttt{socfpga.dtsi} und \texttt{socfpga\_cyclone5.dtsi} vererbt \cite[Version~4.9.78-ltsi, \texttt{arch/arm/boot/dts/}]{website:linux_socfpga_repository}. Nachfolgend werden die wichtigsten Fragmente beschrieben. 
+
+%Zunächst werden die Kernel-Bootargumente angegeben:
+%\begin{code}
+%	\begin{minted}[breaklines, autogobble]{text}
+%		chosen {
+%			bootargs = "earlyprintk debug console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait mem=768M";
+%		};.
+%	\end{minted}
+%	\caption{Devicetree: Kernel-Bootargumente}
+%	\label{lst:custom_dts_bootarg_def}
+%\end{code}
+
+Die Definition des Arbeitsspeichers wird um Einträge für den internen und externen (siehe \cref{sec:external_sdram}) \gls{RAM} des Plasma-SoC erweitert:
+\begin{code}
+	\begin{minted}[breaklines, autogobble]{text}
+	memory@0 {
+		name = "memory";
+		device_type = "memory";
+		reg =   <0x00000000 0x40000000>, /* 1GB DDR3 */
+			<0xC0000000 0x00002000>, /* 8KB Plasma RAM0 */
+			<0xD0000000 0x00010000>; /* 64MB Plasma RAM1 */
+	};
+	\end{minted}
+	\caption{Devicetree: Arbeitsspeicherdefinition}
+	\label{lst:custom_dts_memory_defs}
+\end{code}
+
+Die HPS-Bridge-Definition wird vervollständigt. Das Wichtigste hier ist die Adress-Translation über den \texttt{ranges}-Ausdruck: Die Basisadresse \texttt{0xFF200000} (lightweight HPS‐to‐FPGA bridge \cite[21]{article:embedded_systems}) mit dem Adressbereich \texttt{0x8} wird auf \texttt{0,0}, die Basisadresse \texttt{0xC0000000} (HPS‐to‐FPGA Bridge \cite[22]{article:embedded_systems}) mit dem Adressbereich \texttt{0x5510} wird auf \texttt{1,0}, und die Basisadresse \texttt{0xD4000000} mit dem Adressbereich \texttt{0x80} wird auf \texttt{2,0} abgebildet. Eingehende Basisadressen und Adressbereiche sind im \cref{lst:custom_dts_bridge_ranges} orange markiert, und die Zielbereiche entsprechend grün.
+
+\begin{code}
+	\begin{minted}[breaklines, autogobble, escapeinside=||]{text}
+	hps_0_bridges: bridge@c0000000 {
+		compatible = "altr,bridge-1.0", "simple-bus";
+		reg = < 0xC0000000 0x20000000 0xFF200000 0x00200000 >;
+		reg-names = "axi_h2f", "axi_h2f_lw";
+		#address-cells = < 2 >;
+		#size-cells = < 1 >;
+		ranges = <|\colorbox{green}{0 0}| |\colorbox{orange}{0xFF200000 0x00000008}| >,
+			 <|\colorbox{green}{1 0}| |\colorbox{orange}{0xC0000000 0x00005510}| >,
+			 <|\colorbox{green}{2 0}| |\colorbox{orange}{0xD4000000 0x00000080}| >;
+		 ...
+	\end{minted}
+	
+	\caption{Devicetree: Adresstranslation in der HPS-Bridge}
+	\label{lst:custom_dts_bridge_ranges}
+\end{code}
+
+Dem aus der Basisadresse \texttt{0xFF200000} transliertem Adressbereich \texttt{0,0} wird im \cref{lst:custom_dts_sysid} die Beschreibung des SysID-IP-Core zugeordnet. 
+\begin{code}
+	\begin{minted}[breaklines, autogobble]{text}
+	hps_0_bridges: bridge@c0000000 {
+	...
+		sysid_qsys_0: sysid@0,0 {
+			compatible = "ALTR,sysid-13.1", "ALTR,sysid-1.0", "altr,sysid-1.0";
+			reg = <0 0 0x00000008>;
+			id = < 3735928559 >;
+			timestamp = < 1536342590 >;
+		}; 
+	...
+	\end{minted}
+	
+	\caption{Devicetree: SysID-Definition}
+	\label{lst:custom_dts_sysid}
+\end{code}
+
+Weiter werden im \cref{lst:custom_dts_plsoc_devices} die Beschreibungen für die im Plasma-SoC am Wishbone-Bus angebundenen Timer, Zähler und \glspl{GPIO} definiert.
+Diese sind dem aus der Basisadresse \texttt{0xC0000000} transliertem Adressbereich \texttt{1,0} zugeordnet.
+\begin{code}
+	\begin{minted}[breaklines, autogobble, escapeinside=||]{text}
+	hps_0_bridges: bridge@c0000000 {		 
+	...
+		timer@1,5200 {
+			compatible = "plsoc,timer";
+			reg = <1 0x5200 0x10>;
+		};
+		
+	... weitere 3 timer
+		
+		counter@1,5300 {
+			compatible = |\colorbox{orange}{"plsoc,counter"}|;
+			reg = <1 0x5300 0x10>;
+		};
+		
+	... weitere 3 Zähler
+		
+		gpio@1,5400 {
+			compatible = "plsoc,gpio";
+			reg = <1 0x5400 0x10>;
+		};
+		
+	... weitere 3 GPIOs
+		
+		spi@1,5500 {
+			compatible = "plsoc,spi";
+			reg = <1 0x5500 0x10>;
+		};
+	...
+	\end{minted}
+	
+	\caption{Devicetree: Komponenten im Plasma-SoC}
+	\label{lst:custom_dts_plsoc_devices}
+\end{code}
+
+Zum Schluss werden die über die Avalon-Wishbone-Bridge angebundenen sechs 7-Segment-Anzeigen, der Schalterblock und der Tasterblock beschrieben:
+\begin{code}
+	\begin{minted}[breaklines, autogobble]{text}
+	hps_0_bridges: bridge@c0000000 {		 
+	...
+		hex0: gpio@2,70 {
+			compatible = "altr,pio-15.0", "altr,pio-1.0";
+			reg = <2 0x70 0x00000010>;
+			altr,gpio-bank-width = <7>;		
+			#gpio-cells = <1>;
+			gpio-controller;			
+		};
+	
+	... weitere fünf 7-Segment-Anzeigen
+	
+		switches: gpio@2,10 {
+			compatible = "altr,pio-15.0", "altr,pio-1.0";
+			reg = <2 0x10 0x00000010>;							
+			altr,gpio-bank-width = <10>;
+			#gpio-cells = <1>;
+			gpio-controller;			
+		};
+		
+		keys: gpio@2,0 {
+			compatible = "altr,pio-15.0", "altr,pio-1.0";
+			reg = <2 0x00 0x00000010>;
+			altr,gpio-bank-width = <4>;	
+			#gpio-cells = <1>;						
+			gpio-controller;				
+		};
+	...
+	\end{minted}
+	
+	\caption{Devicetree: Komponenten am Avalon-Bus}
+	\label{lst:custom_dts_avalon_periph}
+\end{code}
+
+Im letzten Schritt wird der Devicetree in ein Binärformat kompiliert, damit er vom Kernel verwendet werden kann. Dafür wird der Devicetree-Compiler \texttt{dtc} benötigt. 
+
+Schwierigkeiten bereitet die Zusammenführung von drei Devicetree-Dateien mit dem C-Präprozessor zu einer, da der Devicetree-Compiler die zusammengeführte Datei nicht akzeptiert. Eine Untersuchung ergibt, dass der Devicetree-Compiler mehrere aufeinanderfolgende DTS-Header \enquote{/dts-v1/;} nicht verarbeiten kann. Diese Wiederholungen entstehen durch die Vorverarbeitung mit dem C-Präprozessor. Ein Update des Devicetree-Compilers behebt das Problem auch nicht. 
+
+Als Workaround wird ein Shell-Skript entwickelt, welches die Devicetree-Dateien mit dem C-Präprozessor zusammenführt und mit einem regulären Ausdruck alle außer dem ersten Vorkommen von \enquote{/dts-v1/;} entfernt. Diese Nachbearbeitung führt dazu, dass die Devicetree-Dateien erfolgreich kompiliert werden.
+
+\subsection{Bootloader}
+\label{sec:impl_bootloader}
+
+Für das DE1-SoC werden aus den Platform-Designer Daten der Preloader und der Bootloader \enquote{U-Boot} generiert. Hierzu wird das Programm \texttt{bsp-editor} aus dem SoC-EDS-Paket aufgerufen und ein neues \gls{BSP} erstellt. Im sich öffnendem Dialog, welcher in \cref{fig:bsp_editor_handoff} dargestellt ist, wird in das Feld \enquote{Preloader settings directory} der Pfad zum \textit{hps\_isw\_handoff/de1\_soc\_hps\_0}-Ordner im Quartus-Projektverzeichnis eingetragen. In diesem Verzeichnis befinden sich durch den Platform-Designer generierte C-Headerdateien mit Parametern zur Konfiguration der Taktgeneratoren, \glspl{PLL}, \glspl{RAM}, \glspl{IO} und Pin-Multiplexer. 
+
+\begin{figure}[!htbp]
+	\centering
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=0.9\linewidth]{images/bsp_editor_handoff}
+		\caption{Konfiguration eines neuen BSP}
+		\label{fig:bsp_editor_handoff}
+	\end{subfigure}%
+	\begin{subfigure}{.5\textwidth}
+		\centering
+		\includegraphics[width=0.9\linewidth]{images/bsp_editor}
+		\caption{Parametrisierung}
+		\label{fig:bsp_editor_params}
+	\end{subfigure}
+	\caption{BSP-Editor}
+	\label{fig:bsp_editor}
+\end{figure}
+
+%\begin{figure}[!htbp] 
+%	\centering
+%	\includegraphics[width=0.8\linewidth]{images/bsp_editor_handoff}
+%	\caption{BSP-Editor: Konfiguration eines neuen BSP}
+%	\label{fig:bsp_editor_handoff}
+%\end{figure}
+
+Im Hauptfenster des \gls{BSP}-Editors (siehe \cref{fig:bsp_editor_params}) werdem die Parameter \texttt{spl\-.performance\-.SERIAL\-\_SUPPORT} und \texttt{spl.reset\-\_assert\-.FPGA\-\_DMA[0-7]} aktiviert, und die Parameter \texttt{spl\-.boot\-.WATCHDOG\-\_ENABLE} und \texttt{spl\-.warm\-\_reset\-\_handshake\-.SDRAM} deaktiviert. 
+%\begin{figure}[!htbp] 
+%	\centering
+%	\includegraphics[width=0.8\linewidth]{images/bsp_editor}
+%	\caption{BSP-Editor: Parametrisierung}
+%	\label{fig:bsp_editor}
+%\end{figure}
+
+Im nächsten Schritt wird der Preloader generiert. Im Ausgabeverzeichnis befindet sich der generierte Preloader und nach Ausführung des Befehls \texttt{make uboot} auch der \enquote{U-Boot}-Bootloader. In der Datei \texttt{uboot-socfpga/include/configs/socfpga\_common.h} werden die Konfigurationsvariablen \texttt{mmcloadpart} mit \enquote{2textbackslash{}0} und \texttt{callscript} mit \enquote{if fatload mmc 0:\$mmcloadpart \$fpgadata \$scriptfile} parametrisiert. 
+
+%Zusätzlich wird ein Boot-Skript entworfen:
+%\begin{code}	
+%	\begin{minted}[breaklines, autogobble]{text}
+%	fatload mmc 0:${mmcloadpart} $fpgadata plasma_soc.rbf;
+%	fpga load 0 $fpgadata $filesize;
+%	run bridge_enable_handoff;
+%	
+%	echo -- Setting Env Variables --
+%	setenv fdtimage socfpga_cyclone5_de1_soc.dtb;
+%	setenv mmcroot /dev/mmcblk0p2;
+%	setenv mmcload 'mmc rescan;${mmcloadcmd} mmc 0:${mmcloadpart} ${loadaddr} ${bootimage};${mmcloadcmd} mmc 0:${mmcloadpart} ${fdtaddr} ${fdtimage};';
+%	setenv mmcboot 'setenv bootargs earlyprintk debug console=ttyS0,115200 root=${mmcroot} rootfstype=ext4 rw rootwait mem=768M; bootz ${loadaddr} - ${fdtaddr}';
+%	
+%	run mmcload;
+%	run mmcboot;
+%	\end{minted}
+%	
+%	\caption{Boot-Skript}
+%	\label{lst:boot_script}
+%\end{code}
+%
+%Nach diesen Anpassungen werden der Preloader, der \enquote{U-Boot}-Bootloader und das Boot-Skript kompiliert.
+
+\subsection{Kernel}
+\label{sec:impl_kernel}
+
+Für das DE1-SoC wird ein moderner Linux-Kernel konfiguriert und kompiliert, da die vorgefertigten Systemabbilder von Terasic und Altera alte Kernel mit Devicetree-Kompatibilitätsproblemen einsetzen.
+
+Das \enquote{linux-socfpga}-Repository \cite{website:linux_socfpga_repository} wird geklont und das Release 4.9.78-ltsi ausgecheckt.
+Mit der Altera Embedded Command Shell \cite[14]{manual:using_linux_on_de1_soc} wird eine Cross-Compiler Umgebung vorbereitet und der Kernel mit dem menugeführtem Konfigurationswerkzeug \texttt{nconfig} konfiguriert. 
+
+Im Konfigurator werden  Parameter wie z.B der Hostname gesetzt, Gerätetreiber und Debug-Möglichkeiten ausgewählt und  Altera-spezifische Einstellungen vorgenommen. Aus der Kernel-Konfiguration wird eine \texttt{defconfig}-Datei generiert, die wie eine Patch-Datei jederzeit auf einer Kernel-Konfiguration angewandt werden kann. 
+
+Kompiliert werden ein zImage und alle ausgewählten Kernel-Module.
+%Die \texttt{defconfig}-Datei kann im \cref{lst:kernel_config_defconfig} eingesehen werden.
+
+%Das \enquote{linux-socfpga}-Repository \cite{website:linux_socfpga_repository} wird geklont und das Release 4.9.78-ltsi ausgecheckt.
+%\begin{minted}[breaklines, autogobble]{text}
+%git clone https://github.com/altera-opensource/linux-socfpga.git
+%git checkout rel_socfpga-4.9.78-ltsi_18.08.01_pr -b 4.9.78-ltsi
+%\end{minted}
+%
+%Die Altera Embedded Command Shell \cite[14]{manual:using_linux_on_de1_soc}  wird gestartet und Umgebungsvariablen für den Cross-Compiler gesetzt:
+%\begin{minted}[breaklines, autogobble]{text}
+%export ARCH=arm 
+%export CROSS_COMPILE=arm-linux-gnueabihf-
+%\end{minted}
+%
+%Die Kernel-Standardkonfiguration für Cyclone V \gls{SoC}-\glspl{FPGA} wird geladen:
+%\begin{minted}[breaklines, autogobble]{text}
+%make socfpga_defconfig
+%\end{minted}
+%
+%Weitere Konfiguration erfolgt mit \texttt{nconfig}:
+%\begin{minted}[breaklines, autogobble]{text}
+%make nconfig
+%\end{minted}
+%
+%Die menugeführte Konfigurationsoberfläche kann wie in \cref{fig:linux_kernel_config_fpga_bridge} aussehen. 
+%\begin{figure}[!htbp]
+%	\centering
+%	\includegraphics[width=0.6\linewidth]{images/linux_kernel_config_fpga_bridge}
+%	\caption{Ausschnitt aus der Kernel-Konfiguration}
+%	\label{fig:linux_kernel_config_fpga_bridge}
+%\end{figure}
+
+%Im Konfigurator werden  Parameter wie z.B der Hostname gesetzt, Gerätetreiber und Debug-Möglichkeiten ausgewählt und insbesondere Altera-spezifische Einstellungen vorgenommen. Aus der Kernel-Konfiguration wird eine \texttt{defconfig}-Datei generiert, welche die nur vorgenommenen Änderungen beinhaltet und jederzeit an einem anderen Kernel-Quelltext angewandt werden kann. Die \texttt{defconfig}-Datei kann im \cref{lst:kernel_config_defconfig} eingesehen werden.
+
+\subsection{Systemabbild}
+
+Ein im Altera University Program verfügbares Systemabbild\footnote{\url{ftp://ftp.altera.com/up/pub/Altera_Material/16.0/Linux_Images/}} für das DE1-SoC-Board wird als Basis für eigene Anpassungen verwendet. In diesem Abbild ist ein Ubuntu 12.04 Betriebssystem vorkonfiguriert. Um eine auf das DE1-SoC-Board mit einem Plasma-\gls{SoC} zugeschnittene Betriebssystem-Distribution mit graphischer Oberfläche zu erstellen, muss nur wenig Aufwand betrieben werden.
+
+Es werden der Preloader, der \enquote{U-Boot}-Bootloader, das Boot-Skript, der kompilierte Devicetree sowie der Kernel mit den Kernel-Modulen durch neue Komponenten aus \cref{sec:impl_bootloader}, \cref{sec:impl_kernel} und \cref{sec:impl_devicetree} ersetzt.
+%
+%\begin{figure}[!htbp] 
+%	\centering
+%	\includegraphics[width=0.8\linewidth]{images/ubuntu_with_custom_kernel}
+%	\caption{Ubuntu 12.04-Distribution mit angepasstem Linux 4.9.78 Kernel}
+%	\label{fig:ubuntu_with_custom_kernel}
+%\end{figure}
+
+\section{Entwicklung von Linux-Anwendungen für das HPS}
+\label{sec:impl_develop_linux_sw_for_de1_soc}
+
+Aufbauend auf einem Beispielprogramm zur Kommunikation mit dem \gls{FPGA} \cite[16ff]{manual:using_linux_on_de1_soc} werden zwei mit dem Plasma-\gls{SoC} kommunizierende Linux-Anwendungen entwickelt: \enquote{SysID} und \enquote{LED Pattern Manager}.
+
+Für einen Zugriff auf Hardware-Ressourcen müssen unter einem Betriebssystem mit virtuellem Speichermanagement physische Adressen in virtuelle abgebildet werden. Das Linux-Betriebssystem ist ein System mit virtuellem Speichermanagement und bietet die zur Adressabbildung notwendige Funktionalität an. 
+
+Mit einem Aufruf von \texttt{open("/dev/mem", (O\_RDWR | O\_SYNC))} wird zunächst das Memory-Device zum Lesen und Schreiben geöffnet, und mit einem Aufruf von \texttt{mmap} werden die physischen Adressräume der übergebenen \gls{Bridge}-Adressen in den virtuellen Adressraum abgebildet. 
+
+In beiden Anwendungen wird eine \texttt{goto}-basierte Fehlerbehandlung umgesetzt. Dadurch werden sowohl im Fehlerfall als auch im normalen Betrieb die Ressourcen in der korrekten Reihenfolge wieder freigegeben. Außerdem wird zur Ausgabe von Fehlermeldungen die Funktion \texttt{void perror(const char *s)} verwendet. Diese Funktion gibt nicht nur die benutzerdefinierte Fehlermeldung aus, sondern  auch die Beschreibung der Fehlerursache \cite[50f]{book:c_and_linux}.
+
+Die Anwendung \enquote{SysID} wird zum Testen der Lightweight HPS2FPGA- und der Wishbone{$\leftrightarrow$}Avalon-\glspl{Bridge} entwickelt. Es findet ausschließlich ein Lesezugriff auf die im SysID-IP-Core fest hinterlegten System-ID und Zeitstempel. Diese werden ausgelesen und im Standard-Ausgabestream ausgegeben. 
+
+Die Anwendung \enquote{LED Pattern Manager} wird zum Testen der Lightweight HPS2FPGA, HPS2FPGA- und der Wishbone{$\leftrightarrow$}Avalon-\glspl{Bridge} entwickelt. Es finden sowohl Lese- als auch Schreibzugriffe statt. 
+
+Analog zur \enquote{SysID}-Anwendung werden die System-ID und der Zeitstempel aus dem SysID-IP-Core ausgelesen und im Standard-Ausgabestream ausgegeben. 
+
+Zusätzlich werden jede \SI{500}{\milli\second} die Werte des Schalter- und Tasterblocks über die HPS2FPGA-\gls{Bridge} ausgelesen und ausgewertet. Der Wert des Schalterblocks wird in den externen \gls{RAM} des Plasma-\gls{SoC} geschrieben, und vom dort ausgeführtem Programm als LED-Muster angezeigt. Der Tasterblock ist active-low: im Normalzustand liegt eine logische \enquote{1} an, und bei Aktivierung liegt eine logische \enquote{0} an. Durch bitweise Negation und Maskierung der unteren 4 Bit wird ein active-high Wert ermittelt.
+
+Wird \textit{KEY3} betätigt, so ändert sich die Bewegungsrichtung des LED-Musters zur Linksbewegung, \textit{KEY2} hingegen bewirkt eine Rechtsbewegung.  
+ Das Drücken des \textit{KEY1}-Tasters halbiert das Timer-Intervall, sodass die Bewegungsgeschwindigkeit verdoppelt wird. Das Betätigen des \textit{KEY0} verlangsamt die Bewegung durch Verdoppelung des Timer-Intervalls.  
+  
+ Da die Schalter und Taster in einer Endlosschleife abgefragt werden und keine Konsoleninteraktion genutzt wird, kann die Anwendung nicht ordentlich beendet werden. Damit die Ressourcen trotzdem freigegeben werden, wird ein benutzerdefinierter Signal-Handler für das Interrupt-Signal (\texttt{SIGINT}) eingeführt. Dafür wird die Funktion \texttt{signal(int signum, void *handler())} verwendet \cite[88f]{book:c_and_linux}. 
+
+
+\section{Entwicklung eines Linux-Treibers für das HPS}
+\label{sec:impl_develop_linux_drivers_for_de1_soc}
+
+Um eine gute Integration des Plasma-\gls{SoC} und dem Linux-Betriebssystem auf dem \gls{HPS} zu demonstrieren, wird ein einfacher Treiber für über Wishbone angebundene Zähler im Plasma-\gls{SoC} entwickelt. Mit diesem Treiber wird der Zugriff auf das Reload-Register des Zählers über sysfs ermöglicht. Als Vorlage dient der Altera SysID-Treiber \cite[Version~4.9.78-ltsi, \texttt{drivers/misc/altera\_sysid.c}]{website:linux_socfpga_repository}.
+
+Im \cref{sec:impl_devicetree} wurde bereits eine Devicetree-Datei für den Plasma-\gls{SoC} auf dem DE1-SoC-Board entworfen. Für diesen Abschnitt sind die im \cref{lst:custom_dts_plsoc_devices} dargestellten Definitionen sämtlicher am Wishbone-Bus angebundener Komponenten des Plasma-\gls{SoC} von hoher Bedeutung. Über den \texttt{compatible}-Eintrag wird der Treiber an alle im Devicetree definierten Geräte mit übereinstimmenden \texttt{compatible}-Schlüsselwert gebunden, in diesem Fall an die Zähler.
+
+Bei der Registrierung des Treibers wird ein sysfs-Verzeichnis im übergeordneten Bus-Verzeichnisses erstellt. In diesem Verzeichnis kann der Treiber eine Schnittstelle exportieren, sodass eine Ansteuerung aus dem Userspace möglich wird \cite[Version~4.9.78-ltsi, \texttt{Documentation/driver-model/driver.txt, Zeile~131}]{website:linux_socfpga_repository}.
+
+Um eine Schnittstelle im sysfs zu exportieren, müssen Attribute und dazugehörige Getter- und Settter (in der Kernel-Terminologie: \texttt{show} und \texttt{store}) implementiert werden \cite[Version~4.9.78-ltsi, \texttt{Documentation/filesystems/sysfs.txt}, Zeile~233]{website:linux_socfpga_repository}. 
+
+Sobald eine Bindung zu einem Zähler im Plasma-\gls{SoC} möglich wird, findet automatisch ein Aufruf der \enquote{plsoc\_counter\_probe}-Methode statt. Der Adressraum des Zählers wird mit \texttt{platform\_get\_resource} abgerufen und mit \texttt{devm\_ioremap\_resource} auf den mit \texttt{devm\_kzalloc} allozierten und initialisierten Speicher abgebildet. Abschließend werden die Attribute mit \texttt{sysfs\_create\_group} zum sysfs hinzugefügt, sodass ein Zugriff auf den Zähler über \texttt{/sys/devices/platform/...} möglich wird. 
+
+Die \enquote{plsoc\_counter\_remove}-Methode wird beim Entladen des Treibers bzw. Deaktivierung des Zählers aufgerufen. Es werden die sysfs-Einträge entfernt und der Adressraum des Zählers vom Treiber entbunden.
+
+%\todo{Compilation}
+\begin{figure}[!htbp] 
+	\centering
+	\includegraphics[width=0.9\linewidth]{images/driver_sysfs}
+	\caption[Zugriff auf das Reload-Register aus dem Terminal]{Zugriff auf das Reload-Register aus dem Terminal. Es wird der erste Zähler mit der Wishbone-Adresse \texttt{0x5300} angesteuert.}
+	\label{fig:driver_sysfs}
+\end{figure}
